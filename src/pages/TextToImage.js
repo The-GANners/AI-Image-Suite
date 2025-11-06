@@ -23,6 +23,7 @@ const TextToImage = () => {
   // NEW: selection mode for download
   const [selectingForDownload, setSelectingForDownload] = useState(false);
   const [selectedForDownload, setSelectedForDownload] = useState(new Set());
+  const [showBatchSizeWarning, setShowBatchSizeWarning] = useState(false);
   const navigate = useNavigate();
   const { requireAuth } = useAuth();
 
@@ -362,6 +363,21 @@ const TextToImage = () => {
                 disabled={isGenerating}
               />
 
+              {/* Disclaimer */}
+              <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <div className="flex items-start space-x-2">
+                  <span className="text-amber-600 dark:text-amber-400 text-lg flex-shrink-0">ℹ️</span>
+                  <div>
+                    <p className="text-sm text-amber-800 dark:text-amber-300 font-medium mb-1">
+                      Important Information:
+                    </p>
+                    <p className="text-sm text-amber-700 dark:text-amber-400">
+                      <strong>COCO Dataset:</strong> This model can only generate images for the 80 specific categories in the COCO dataset (e.g., "person," "car," "dog," "chair"). It does not understand synonyms or related items, which is why prompts like "a human figure" or "potato" will fail. For best results, please use exact COCO category names.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* Example Prompts */}
               <div className="mb-4">
                 <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -436,14 +452,44 @@ const TextToImage = () => {
                     Number of Images
                   </label>
                   <input
-                    type="number"
-                    min="1"
-                    max="20"
+                    type="text"
                     value={settings.batchSize}
-                    onChange={(e) => setSettings({...settings, batchSize: Math.max(1, Math.min(20, parseInt(e.target.value) || 1))})}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      // Only allow digits
+                      if (value === '' || /^\d+$/.test(value)) {
+                        const numValue = value === '' ? 1 : parseInt(value, 10);
+                        // Clamp between 1 and n
+                        if (numValue >= 1 && numValue <= 50) {
+                          setSettings({...settings, batchSize: numValue});
+                          setShowBatchSizeWarning(false);
+                        } else if (numValue > 50) {
+                          setSettings({...settings, batchSize: 50});
+                          setShowBatchSizeWarning(true);
+                          setTimeout(() => setShowBatchSizeWarning(false), 3000);
+                        } else if (value !== '') {
+                          setSettings({...settings, batchSize: 1});
+                          setShowBatchSizeWarning(true);
+                          setTimeout(() => setShowBatchSizeWarning(false), 3000);
+                        }
+                      }
+                    }}
+                    onBlur={(e) => {
+                      // Ensure valid number on blur
+                      if (e.target.value === '' || parseInt(e.target.value, 10) < 1) {
+                        setSettings({...settings, batchSize: 1});
+                        setShowBatchSizeWarning(false);
+                      }
+                    }}
+                    placeholder="1-50"
                     className="input"
                     disabled={isGenerating}
                   />
+                  {showBatchSizeWarning && (
+                    <p className="mt-2 text-sm text-red-600 dark:text-red-400 animate-fade-in">
+                      ⚠️ Please enter a number between 1 and 50
+                    </p>
+                  )}
                 </div>
 
                 <div>

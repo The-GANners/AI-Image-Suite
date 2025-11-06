@@ -139,29 +139,6 @@ export const AuthProvider = ({ children }) => {
     };
   }, [currentUser, handleLogout]);
 
-  // Logout on tab close effect
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const handleBeforeUnload = (e) => {
-      // Clear auth tokens on tab close
-      localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.USER_INFO);
-      localStorage.removeItem('last_activity_time');
-      
-      // Sign out from Firebase
-      signOut(auth).catch((error) => {
-        console.error('Firebase sign-out error on tab close:', error);
-      });
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [currentUser]);
-
   const handleLogin = async (email, password) => {
     try {
       setAuthError('');
