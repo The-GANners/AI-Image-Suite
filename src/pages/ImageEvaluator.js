@@ -1012,25 +1012,6 @@ const ImageEvaluator = () => {
                   ✨ Prompt auto-filled from generation
                 </p>
               )}
-              
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Similarity Threshold: {threshold}
-                </label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="0.4"
-                  step="0.01"
-                  value={threshold}
-                  onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                  className="w-full"
-                  disabled={isEvaluating}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Lower values are more lenient, higher values are stricter
-                </p>
-              </div>
 
               <button
                 onClick={handleEvaluateClick}
