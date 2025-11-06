@@ -4,7 +4,6 @@ from pathlib import Path
 import importlib.util
 
 from flask import Blueprint, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
 
 # Explicitly load models.py from the server directory
 server_dir = Path(__file__).parent
@@ -30,41 +29,62 @@ auth_bp = Blueprint('auth', __name__)
 
 @auth_bp.route('/api/auth/signup', methods=['POST'])
 def signup():
+    """
+    Signup endpoint - expects Firebase token after user is created on frontend
+    This endpoint creates/updates the user record in our database
+    """
     data = request.get_json()
     
-    # Validate required fields
-    required_fields = ['name', 'email', 'password']
-    for field in required_fields:
-        if not data.get(field):
-            return jsonify({'message': f'{field} is required'}), 400
+    # Validate required fields - now we need the Firebase token instead of password
+    if not data.get('firebaseToken'):
+        return jsonify({'message': 'Firebase token is required'}), 400
+    
+    # Verify Firebase token
+    decoded_token = verify_firebase_token(data['firebaseToken'])
+    if not decoded_token:
+        return jsonify({'message': 'Invalid Firebase token'}), 401
     
     # Create a session
     session = Session()
     
     try:
+        # Extract user info from Firebase token
+        firebase_uid = decoded_token.get('sub') or decoded_token.get('user_id')
+        email = decoded_token.get('email')
+        name = data.get('name') or decoded_token.get('name') or email.split('@')[0]
+        
+        if not email or not firebase_uid:
+            return jsonify({'message': 'Invalid Firebase token data'}), 400
+        
         # Check if user already exists
-        existing_user = session.query(User).filter_by(email=data['email']).first()
+        existing_user = session.query(User).filter_by(email=email).first()
         if existing_user:
-            return jsonify({'message': 'Email already registered'}), 400
+            # Update Firebase UID if needed
+            if not existing_user.firebase_uid:
+                existing_user.firebase_uid = firebase_uid
+                existing_user.name = name  # Update name if provided
+                session.commit()
+            user = existing_user
+        else:
+            # Create new user (no password_hash needed for Firebase users)
+            new_user = User(
+                name=name,
+                email=email,
+                firebase_uid=firebase_uid,
+                password_hash=None
+            )
+            
+            session.add(new_user)
+            session.commit()
+            user = new_user
         
-        # Create new user
-        password_hash = generate_password_hash(data['password'])
-        new_user = User(
-            name=data['name'],
-            email=data['email'],
-            password_hash=password_hash
-        )
-        
-        session.add(new_user)
-        session.commit()
-        
-        # Generate JWT token
-        token = new_user.generate_token()
+        # Generate JWT token for backend authentication
+        token = user.generate_token()
         
         # Return user info and token
         return jsonify({
             'message': 'User created successfully',
-            'user': new_user.to_dict(),
+            'user': user.to_dict(),
             'token': token
         }), 201
         
@@ -76,24 +96,52 @@ def signup():
 
 @auth_bp.route('/api/auth/login', methods=['POST'])
 def login():
+    """
+    Login endpoint - expects Firebase token after user signs in on frontend
+    This endpoint verifies the Firebase token and returns our backend token
+    """
     data = request.get_json()
     
-    # Validate required fields
-    if not data.get('email') or not data.get('password'):
-        return jsonify({'message': 'Email and password are required'}), 400
+    # Validate required field - now we need the Firebase token instead of password
+    if not data.get('firebaseToken'):
+        return jsonify({'message': 'Firebase token is required'}), 400
+    
+    # Verify Firebase token
+    decoded_token = verify_firebase_token(data['firebaseToken'])
+    if not decoded_token:
+        return jsonify({'message': 'Invalid Firebase token'}), 401
     
     # Create a session
     session = Session()
     
     try:
-        # Find user by email
-        user = session.query(User).filter_by(email=data['email']).first()
+        # Extract user info from Firebase token
+        firebase_uid = decoded_token.get('sub') or decoded_token.get('user_id')
+        email = decoded_token.get('email')
+        name = decoded_token.get('name') or email.split('@')[0]
         
-        # Check if user exists and password is correct
-        if not user or not check_password_hash(user.password_hash, data['password']):
-            return jsonify({'message': 'Invalid email or password'}), 401
+        if not email or not firebase_uid:
+            return jsonify({'message': 'Invalid Firebase token data'}), 400
         
-        # Generate JWT token
+        # Find or create user in our database
+        user = session.query(User).filter_by(email=email).first()
+        
+        if not user:
+            # User doesn't exist in our database, create them
+            user = User(
+                name=name,
+                email=email,
+                firebase_uid=firebase_uid,
+                password_hash=None
+            )
+            session.add(user)
+            session.commit()
+        elif not user.firebase_uid:
+            # Update existing user with Firebase UID
+            user.firebase_uid = firebase_uid
+            session.commit()
+        
+        # Generate JWT token for backend authentication
         token = user.generate_token()
         
         # Return user info and token
@@ -104,6 +152,7 @@ def login():
         }), 200
         
     except Exception as e:
+        session.rollback()
         return jsonify({'message': f'Error during login: {str(e)}'}), 500
     finally:
         session.close()
