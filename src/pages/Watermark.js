@@ -718,7 +718,33 @@ const Watermark = () => {
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Text size
                         </label>
-                        <input type="number" min="6" className="input w-24" value={textSize} onChange={(e)=> setTextSize(parseInt(e.target.value || 0, 10))} />
+                        <input 
+                          type="text" 
+                          className="input w-24" 
+                          value={textSize} 
+                          onChange={(e)=> {
+                            const value = e.target.value;
+                            // Only allow digits
+                            if (value === '' || /^\d+$/.test(value)) {
+                              const numValue = value === '' ? 32 : parseInt(value, 10);
+                              // Clamp between 6 and 200
+                              if (numValue >= 6 && numValue <= 200) {
+                                setTextSize(numValue);
+                              } else if (numValue > 200) {
+                                setTextSize(200);
+                              } else if (numValue < 6 && value !== '') {
+                                setTextSize(6);
+                              }
+                            }
+                          }}
+                          onBlur={(e) => {
+                            // Ensure valid number on blur
+                            if (e.target.value === '' || parseInt(e.target.value, 10) < 6) {
+                              setTextSize(32);
+                            }
+                          }}
+                          placeholder="6-200" 
+                        />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
