@@ -6,8 +6,9 @@ REM Start Backend Server in new window
 echo Starting Backend Server...
 start "Backend Server" cmd /k "cd /d %~dp0 && .\myenv\Scripts\activate.bat && cd server && python app.py"
 
-REM Wait a moment before starting frontend
-timeout /t 2 /nobreak >nul
+REM Wait for backend to start (increase if needed)
+echo Waiting for backend server to start...
+timeout /t 10 /nobreak >nul
 
 REM Start Frontend in new window
 echo Starting Frontend...
