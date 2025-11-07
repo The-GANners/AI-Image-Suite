@@ -42,7 +42,22 @@ A comprehensive Text Prompt to Watermarked Image generation web application that
   - High redundancy embedding for robustness against attacks.
   - All metrics are computed and displayed in the web UI for transparency.
 
-### 📱 Modern UI/UX
+### � Authentication & User Management
+- **Firebase Authentication** - Secure, cross-device authentication
+- **Multiple Sign-in Methods:**
+  - Google Sign-in (OAuth)
+  - Email/Password authentication
+- **User Features:**
+  - Personal galleries for generated, evaluated, and watermarked images
+  - Session management with 30-minute timeout
+  - Secure JWT tokens for API authentication
+  - Cross-device synchronization
+- **Security:**
+  - Firebase-managed password encryption
+  - Token-based API authorization
+  - Automatic session timeout on inactivity
+
+### �📱 Modern UI/UX
 - Responsive design for all device sizes
 - Drag-and-drop file uploads
 - Real-time progress indicators
@@ -52,12 +67,19 @@ A comprehensive Text Prompt to Watermarked Image generation web application that
 ## Technology Stack
 
 - **Frontend**: React 18 with functional components and hooks
+- **Backend**: Flask (Python) with SQLAlchemy ORM
+- **Authentication**: Firebase Authentication (Google OAuth + Email/Password)
+- **Database**: SQLite for user data and image records
 - **Styling**: Tailwind CSS with custom components
 - **Icons**: Heroicons
 - **Routing**: React Router DOM
 - **File Handling**: React Dropzone
 - **Notifications**: React Hot Toast
 - **Build Tool**: Create React App
+- **AI Models**: 
+  - DF-GAN for text-to-image generation
+  - CLIP for image-prompt evaluation
+  - DWT-DCT for invisible watermarking
 
 ## Server Setup and Path Configuration
 
@@ -82,30 +104,30 @@ The AI-Image-Suite server uses a flexible path configuration system that works a
    npm install
    ```
 
+4. **Configure Firebase Authentication**
+   
+   See `QUICK_SETUP.md` for detailed Firebase setup instructions.
+   
+   Quick steps:
+   - Go to [Firebase Console](https://console.firebase.google.com/)
+   - Select your project
+   - Enable **Email/Password** authentication in Authentication > Sign-in method
+   - Configure `.env` file with your Firebase credentials:
+     ```
+     FIREBASE_PROJECT_ID=your-project-id
+     ```
 
-### Validation
+5. **Start the backend server**
+   ```bash
+   python server/app.py
+   ```
 
-Check if your setup is correct:
-
-# Start the server
-python server/app.py
-
-# Check the setup endpoint
-curl http://localhost:5001/api/check
-
-
-The `/api/check` endpoint will report any missing files or incorrect paths.
-
-# In one more terminal:
-
-3. cd AI-Image-Suite
-
-4. **Start the development server**
+6. **Start the development server**
    ```bash
    npm start
    ```
 
-5. **Open your browser**
+7. **Open your browser**
    Navigate to `http://localhost:3000`
 
 

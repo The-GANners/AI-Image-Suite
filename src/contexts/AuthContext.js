@@ -1,7 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { signInWithPopup, signOut } from 'firebase/auth';
+import { 
+  signInWithPopup, 
+  signOut, 
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile
+} from 'firebase/auth';
 import { STORAGE_KEYS, AUTH_MESSAGES } from '../utils/constants';
 import { auth, googleProvider } from '../utils/firebase';
 
@@ -144,12 +150,18 @@ export const AuthProvider = ({ children }) => {
       setAuthError('');
       setLoading(true);
       
+      // Sign in with Firebase first
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+      const firebaseToken = await firebaseUser.getIdToken();
+      
+      // Send Firebase token to backend
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ firebaseToken }),
       });
 
       const data = await response.json();
@@ -169,8 +181,24 @@ export const AuthProvider = ({ children }) => {
       
       return true;
     } catch (error) {
-      setAuthError(error.message);
-      toast.error(error.message || AUTH_MESSAGES.LOGIN_ERROR);
+      console.error('Login error:', error);
+      
+      // Handle Firebase-specific errors
+      let message = error.message;
+      if (error.code === 'auth/user-not-found') {
+        message = 'No account found with this email';
+      } else if (error.code === 'auth/wrong-password') {
+        message = 'Invalid email or password';
+      } else if (error.code === 'auth/invalid-email') {
+        message = AUTH_MESSAGES.INVALID_EMAIL;
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Please try again later';
+      } else if (error.code === 'auth/invalid-credential') {
+        message = 'Invalid email or password';
+      }
+      
+      setAuthError(message);
+      toast.error(message);
       return false;
     } finally {
       setLoading(false);
@@ -236,17 +264,35 @@ export const AuthProvider = ({ children }) => {
       setAuthError('');
       setLoading(true);
       
+      // Create user in Firebase first
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+      
+      // Update Firebase profile with name
+      await updateProfile(firebaseUser, {
+        displayName: name
+      });
+      
+      // Get Firebase token
+      const firebaseToken = await firebaseUser.getIdToken();
+      
+      // Send to backend to create user record in our database
       const response = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ 
+          firebaseToken,
+          name
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
+        // If backend fails, we should probably delete the Firebase user
+        // but for now, just throw the error
         throw new Error(data.message || AUTH_MESSAGES.SIGNUP_ERROR);
       }
 
@@ -261,8 +307,22 @@ export const AuthProvider = ({ children }) => {
       
       return true;
     } catch (error) {
-      setAuthError(error.message);
-      toast.error(error.message || AUTH_MESSAGES.SIGNUP_ERROR);
+      console.error('Signup error:', error);
+      
+      // Handle Firebase-specific errors
+      let message = error.message;
+      if (error.code === 'auth/email-already-in-use') {
+        message = 'This email is already registered';
+      } else if (error.code === 'auth/invalid-email') {
+        message = AUTH_MESSAGES.INVALID_EMAIL;
+      } else if (error.code === 'auth/operation-not-allowed') {
+        message = 'Email/password authentication is not enabled';
+      } else if (error.code === 'auth/weak-password') {
+        message = 'Password should be at least 6 characters';
+      }
+      
+      setAuthError(message);
+      toast.error(message);
       return false;
     } finally {
       setLoading(false);
