@@ -1231,25 +1231,28 @@ const ImageEvaluator = () => {
 
                 {/* Keyword Analysis - ADD KEY PROP */}
                 <div className="card p-6" key={`keywords-${evaluationKey}-${evaluation.keywordAnalysis.length}`}>
-                  <h3 className="text-lg font-semibold mb-4">Detailed Keyword Analysis</h3>
+                  <h3 className="text-lg font-semibold mb-4 dark:text-gray-100">Detailed Keyword Analysis</h3>
                   <div className="space-y-3">
                     {evaluation.keywordAnalysis.map((keyword, index) => (
-                      <div key={`${evaluationKey}-${keyword.keyword}-${index}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div
+                        key={`${evaluationKey}-${keyword.keyword}-${index}`}
+                        className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg"
+                      >
                         <div className="flex items-center space-x-3">
                           {keyword.statusType === 'present' ? (
-                            <CheckCircleIcon className="w-5 h-5 text-green-500" />
+                            <CheckCircleIcon className="w-5 h-5 text-green-500 dark:text-green-400" />
                           ) : keyword.statusType === 'weak' ? (
-                            <ExclamationTriangleIcon className="w-5 h-5 text-yellow-500" />
+                            <ExclamationTriangleIcon className="w-5 h-5 text-yellow-500 dark:text-yellow-400" />
                           ) : (
-                            <ExclamationTriangleIcon className="w-5 h-5 text-red-500" />
+                            <ExclamationTriangleIcon className="w-5 h-5 text-red-500 dark:text-red-400" />
                           )}
                           <div>
-                            <span className="font-medium">{keyword.keyword}</span>
-                            <span className="ml-2 text-xs text-gray-500">{keyword.status}</span>
+                            <span className="font-medium text-gray-800 dark:text-gray-100">{keyword.keyword}</span>
+                            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">{keyword.status}</span>
                           </div>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="text-sm font-medium text-gray-700">
+                          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
                             {keyword.confidencePercent}
                           </span>
                         </div>
