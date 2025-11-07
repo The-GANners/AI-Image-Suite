@@ -411,7 +411,7 @@ def generate():
 
     tmp_root = Path(tempfile.gettempdir()) / f'dfgan_{uuid.uuid4().hex}'
     images_b64: List[str] = []
-    generated_paths: List[Path] = []  # Store paths for saving to database
+    generated_paths: List[Path] = []
 
     try:
         for i in range(batch_size):
@@ -419,8 +419,20 @@ def generate():
             if seeds and isinstance(seeds, list) and i < len(seeds):
                 seed = seeds[i]
 
-            # NEW: Check for Plant/Botanical prompts FIRST (before vehicle/animal)
-            if is_plant_prompt(prompt):
+            # NEW: Skip BigGAN entirely if dataset is 'bird' (CUB)
+            if dataset == 'bird':
+                # BIRD dataset: ONLY use DF-GAN, no BigGAN interference
+                img_path = dfgan_generate(
+                    prompt, model_key, tmp_root,
+                    seed if seed is not None and int(seed) >= 0 else None,
+                    steps, guidance
+                )
+                images_b64.append(encode_b64(img_path))
+                generated_paths.append(img_path)
+                print(f"✅ [CUB] Generated bird image using DF-GAN only: {img_path}")
+            
+            # COCO dataset: Check for specialized generators (Plant/Vehicle/Animal)
+            elif is_plant_prompt(prompt):
                 print(f"🌸 [PLANT] Using specialized plant generator for: {prompt}")
                 output_filename = uuid.uuid4().hex
                 img_path, plant_type = generate_plant_image(prompt, tmp_root, output_filename)
@@ -439,7 +451,7 @@ def generate():
                     images_b64.append(encode_b64(img_path))
                     generated_paths.append(img_path)
             
-            # Vehicle/Animal specialized handling (existing logic)
+            # Vehicle/Animal specialized handling
             elif is_vehicle_prompt(prompt) or _is_animal_prompt(prompt):
                 label = 'Animal' if _is_animal_prompt(prompt) else 'Vehicle'
                 print(f"[{label}] Using specialized {label.lower()} generator for: {prompt}")
