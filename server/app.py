@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 from PIL import Image as PILImage
 import re  # NEW
+from PIL import Image
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -37,13 +38,35 @@ MODULE2_PATH = Path(__file__).parent.parent.parent / "Module-2"
 if str(MODULE2_PATH) not in sys.path:
     sys.path.insert(0, str(MODULE2_PATH))
 
-# NEW: Add Watermark-UI to Python path and import WaterMarker
+# FIXED: Import config and other server modules BEFORE adding watermarker path
+# This prevents importing the wrong config.py from Watermark-UI
+from config import (
+    DF_GAN_PATH, DF_GAN_CODE_PATH, DF_GAN_SRC_PATH,
+    CUB_WEIGHTS, COCO_WEIGHTS, get_data_dir, validate_paths, get_config_info
+)
+from dfgan_wrapper import DFGANGenerator
+
+# Import the vehicle generator
+from vehicle_gan import is_vehicle_prompt, generate_vehicle_image
+
+# NEW: Import the plant generator
+from plant_gan import is_plant_prompt, generate_plant_image
+
+# Import other modules
+from stylegan_wrapper import StyleGANGenerator
+from blend_utils import blend_images
+
+# NEW: Add Watermark-UI to Python path AFTER importing server config
 WATERMARK_UI_PATH = Path(__file__).parent.parent.parent / "Watermark-UI"
 if str(WATERMARK_UI_PATH) not in sys.path:
     sys.path.insert(0, str(WATERMARK_UI_PATH))
 
+# FIXED: Import WaterMarker after adding path
 try:
-    from FreeMark.tools.watermarker import WaterMarker
+    watermarker_path = WATERMARK_UI_PATH / "FreeMark" / "tools"
+    if str(watermarker_path) not in sys.path:
+        sys.path.insert(0, str(watermarker_path))
+    from watermarker import WaterMarker
     WATERMARK_AVAILABLE = True
     if RUN_MAIN:
         print(f"✅ [SERVER] WaterMarker imported from: {WATERMARK_UI_PATH}")
@@ -55,31 +78,20 @@ except Exception as e:
 if RUN_MAIN:
     print(f"🔍 [SERVER] Added Module-2 path: {MODULE2_PATH}")
 
-# Try to import the evaluator
+# FIXED: Import evaluator after Module-2 is in path
 try:
+    if str(MODULE2_PATH) not in sys.path:
+        sys.path.insert(0, str(MODULE2_PATH))
     from image_prompt_evaluator import ImagePromptEvaluator
     EVALUATOR_AVAILABLE = True
     if RUN_MAIN:
         print("✅ [SERVER] ImagePromptEvaluator imported successfully")
 except ImportError as e:
+    EVALUATOR_AVAILABLE = False
     if RUN_MAIN:
         print(f"❌ [SERVER] Failed to import ImagePromptEvaluator: {e}")
-    EVALUATOR_AVAILABLE = False
 
-# Import configuration and wrapper module
-from config import (
-    DF_GAN_PATH, DF_GAN_CODE_PATH, DF_GAN_SRC_PATH,
-    CUB_WEIGHTS, COCO_WEIGHTS, get_data_dir, validate_paths, get_config_info
-)
-from dfgan_wrapper import DFGANGenerator
-
-# Import the vehicle generator
-from vehicle_gan import is_vehicle_prompt, generate_vehicle_image
-
-# Import other modules
-from stylegan_wrapper import StyleGANGenerator
-from blend_utils import blend_images
-
+# Add auth_routes and gallery_routes imports here
 # Import auth routes - use importlib to avoid conflict with DF-GAN models
 import importlib.util
 from pathlib import Path
@@ -407,8 +419,28 @@ def generate():
             if seeds and isinstance(seeds, list) and i < len(seeds):
                 seed = seeds[i]
 
-            # Vehicle specialized handling (now logs Animal/Vehicle accordingly)
-            if is_vehicle_prompt(prompt) or _is_animal_prompt(prompt):
+            # NEW: Check for Plant/Botanical prompts FIRST (before vehicle/animal)
+            if is_plant_prompt(prompt):
+                print(f"🌸 [PLANT] Using specialized plant generator for: {prompt}")
+                output_filename = uuid.uuid4().hex
+                img_path, plant_type = generate_plant_image(prompt, tmp_root, output_filename)
+                
+                if img_path and os.path.exists(str(img_path)):
+                    images_b64.append(encode_b64(img_path))
+                    generated_paths.append(img_path)
+                    print(f"✅ [PLANT] Plant image generated: {img_path} (type: {plant_type})")
+                else:
+                    print("⚠️ [PLANT] Plant generation failed, falling back to DF-GAN")
+                    img_path = dfgan_generate(
+                        prompt, model_key, tmp_root,
+                        seed if seed is not None and int(seed) >= 0 else None,
+                        steps, guidance
+                    )
+                    images_b64.append(encode_b64(img_path))
+                    generated_paths.append(img_path)
+            
+            # Vehicle/Animal specialized handling (existing logic)
+            elif is_vehicle_prompt(prompt) or _is_animal_prompt(prompt):
                 label = 'Animal' if _is_animal_prompt(prompt) else 'Vehicle'
                 print(f"[{label}] Using specialized {label.lower()} generator for: {prompt}")
                 output_filename = uuid.uuid4().hex
@@ -427,6 +459,8 @@ def generate():
                     )
                     images_b64.append(encode_b64(img_path))
                     generated_paths.append(img_path)
+            
+            # Default: DF-GAN for everything else
             else:
                 img_path = dfgan_generate(
                     prompt, model_key, tmp_root,
@@ -563,6 +597,7 @@ def evaluate_single_image():
 
         # Save to temp file
         tmp_dir = Path(tempfile.gettempdir()) / f'eval_{uuid.uuid4().hex}'
+
         tmp_dir.mkdir(parents=True, exist_ok=True)
         img_path = tmp_dir / 'image.png'
         img.save(str(img_path))
@@ -759,19 +794,12 @@ def apply_invisible_watermark():
         return resp
 
     try:
-        from invisible_watermark import apply_invisible_watermark as apply_invisible_wm
+        from invisible_watermark import apply_invisible_watermark as apply_inv_wm, test_watermark_robustness
     except ImportError:
         return jsonify({'error': 'Invisible watermarking not available. Install required packages: pywt, scipy, scikit-image'}), 500
 
-    # Get current user if authenticated
-    current_user = None
-    auth_header = request.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(' ')[1]
-        try:
-            current_user = get_current_user_from_token(token)
-        except:
-            pass
+    # Get current user if authenticated - FIXED
+    current_user = get_user_from_request()
 
     try:
         payload = request.get_json(force=True) or {}
@@ -782,86 +810,39 @@ def apply_invisible_watermark():
     watermark_mode = payload.get('watermarkMode', 'text')  # 'text' or 'image'
     watermark_text = payload.get('watermarkText', '')
     watermark_data_url = payload.get('watermarkDataUrl')
-    alpha = float(payload.get('alpha', 0.28))  # Embedding strength
 
-    print(f"🔍 [INVISIBLE WATERMARK] Processing {len(images)} image(s), mode={watermark_mode}")
-
-    if not isinstance(images, list) or len(images) == 0:
-        return jsonify({'error': 'images array is required'}), 400
-
-    if watermark_mode not in ('text', 'image'):
-        return jsonify({'error': "watermarkMode must be 'text' or 'image'"}), 400
-
-    if watermark_mode == 'text' and not watermark_text:
-        return jsonify({'error': 'watermarkText required for text mode'}), 400
-
-    if watermark_mode == 'image' and not watermark_data_url:
-        return jsonify({'error': 'watermarkDataUrl required for image mode'}), 400
-
-    # Prepare watermark image if in image mode
-    watermark_pil = None
-    if watermark_mode == 'image':
-        try:
-            watermark_pil = _decode_any_to_pil(watermark_data_url)
-        except Exception as e:
-            return jsonify({'error': f'Invalid watermark image: {e}'}), 400
+    # NEW: customization knobs from client
+    alpha = payload.get('alpha', None)
+    redundancy = payload.get('redundancy', None)
 
     out_images = []
-    try:
-        for idx, item in enumerate(images):
-            url = item.get('url')
-            name = item.get('name') or f'invisible_watermarked_{idx+1}.png'
-            if not url:
-                return jsonify({'error': f'image at index {idx} missing url'}), 400
+    for idx, item in enumerate(images):
+        try:
+            name = item.get('name') or f'image_{idx+1}.png'
+            b64 = (item.get('url') or '').split(',', 1)[-1]
+            host = Image.open(io.BytesIO(base64.b64decode(b64))).convert('RGB')
 
-            try:
-                src = _decode_any_to_pil(url)
-            except Exception as e:
-                return jsonify({'error': f'Invalid image at index {idx}: {e}'}), 400
+            wm_img = None
+            if watermark_mode == 'image' and watermark_data_url:
+                wm_b64 = watermark_data_url.split(',', 1)[-1]
+                wm_img = Image.open(io.BytesIO(base64.b64decode(wm_b64)))
 
-            # Apply invisible watermark
-            try:
-                out_pil = apply_invisible_wm(
-                    host_pil_image=src,
-                    watermark_mode=watermark_mode,
-                    watermark_text=watermark_text if watermark_mode == 'text' else None,
-                    watermark_pil_image=watermark_pil if watermark_mode == 'image' else None,
-                    alpha=alpha
-                )
-            except Exception as e:
-                return jsonify({'error': f'Invisible watermarking failed at index {idx}: {e}'}), 500
+            result = apply_inv_wm(
+                host_pil_image=host,
+                watermark_mode=watermark_mode,
+                watermark_text=watermark_text,
+                watermark_pil_image=wm_img,
+                alpha=alpha,
+                redundancy=redundancy
+            )
+            buf = io.BytesIO()
+            result.save(buf, format='PNG')
+            out_images.append({ 'name': name, 'dataUrl': f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}" })
+        except Exception as e:
+            return jsonify({ 'error': f'Invisible watermarking failed at index {idx}: {e}' }), 400
 
-            # Save to database if user is authenticated
-            if current_user:
-                try:
-                    save_watermarked_image(
-                        user_id=current_user.id,
-                        original_path=name,
-                        watermarked_pil=out_pil,
-                        watermark_text=f"Invisible: {watermark_text if watermark_mode == 'text' else 'Image'}",
-                        position='invisible',
-                        opacity=1.0
-                    )
-                except Exception as e:
-                    print(f"⚠️ Failed to save watermarked image to gallery: {e}")
+    return jsonify({ 'images': out_images })
 
-            out_images.append({
-                'name': name,
-                'dataUrl': _pil_to_data_url(out_pil, fmt='PNG')
-            })
-
-    except Exception as e:
-        return jsonify({'error': f'Processing failed: {e}'}), 500
-
-    if current_user and len(out_images) > 0:
-        print(f"✅ [INVISIBLE WATERMARK] Applied invisible watermark to {len(out_images)} image(s) for user {current_user.email}")
-    else:
-        print(f"✅ [INVISIBLE WATERMARK] Applied invisible watermark to {len(out_images)} image(s)")
-    
-    return jsonify({'images': out_images})
-
-
-# ROBUSTNESS testing endpoint for invisible watermarks
 @app.route('/api/watermark/test-robustness', methods=['POST', 'OPTIONS'], endpoint='watermark_test_robustness')
 def test_invisible_watermark_robustness():
     """Test robustness of invisible watermark against various attacks"""
@@ -874,22 +855,12 @@ def test_invisible_watermark_robustness():
         return resp
 
     try:
-        from invisible_watermark import apply_invisible_watermark as apply_invisible_wm, test_watermark_robustness
+        from invisible_watermark import test_watermark_robustness
     except ImportError:
         return jsonify({'error': 'Invisible watermarking not available. Install required packages: pywt, scipy, scikit-image'}), 500
 
-    # Get current user if authenticated
-    current_user = None
-    auth_header = request.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(' ')[1]
-        try:
-            from models import User
-            user_data = User.verify_token(token)
-            if user_data:
-                current_user = User.query.filter_by(email=user_data['email']).first()
-        except Exception as e:
-            print(f"⚠️ Token verification failed: {e}")
+    # Get current user if authenticated - FIXED
+    current_user = get_user_from_request()
 
     try:
         payload = request.get_json(force=True) or {}
@@ -897,7 +868,9 @@ def test_invisible_watermark_robustness():
         watermark_mode = payload.get('watermarkMode', 'text')
         watermark_text = payload.get('watermarkText', '')
         watermark_data_url = payload.get('watermarkDataUrl', '')
-        alpha = float(payload.get('invisibleAlpha', 0.28))
+        # NEW: accept client-provided alpha/redundancy
+        alpha = payload.get('alpha', None)
+        redundancy = payload.get('redundancy', None)
 
         if not images:
             return jsonify({'error': 'No images provided'}), 400
@@ -911,17 +884,17 @@ def test_invisible_watermark_robustness():
         # Process only the first image for robustness testing
         first_image = images[0]
         name = first_image.get('name', 'test')
-        data_url = first_image.get('dataUrl', '')
+        # FIXED: Handle both 'dataUrl' and 'url' keys
+        data_url = first_image.get('url') or first_image.get('dataUrl', '')
 
         if not data_url:
             return jsonify({'error': 'Image data missing'}), 400
 
         # Decode base64 image
-        from io import BytesIO
         if ',' in data_url:
             data_url = data_url.split(',', 1)[1]
         img_bytes = base64.b64decode(data_url)
-        img_pil = PILImage.open(BytesIO(img_bytes))
+        img_pil = PILImage.open(io.BytesIO(img_bytes))
 
         # Prepare watermark
         watermark_pil = None
@@ -931,27 +904,19 @@ def test_invisible_watermark_robustness():
             if ',' in watermark_data_url:
                 watermark_data_url = watermark_data_url.split(',', 1)[1]
             wm_bytes = base64.b64decode(watermark_data_url)
-            watermark_pil = PILImage.open(BytesIO(wm_bytes))
+            watermark_pil = PILImage.open(io.BytesIO(wm_bytes))
         else:  # text mode
             if not watermark_text:
                 return jsonify({'error': 'Watermark text is required for text mode'}), 400
 
-        # First, apply the watermark
-        watermarked_pil = apply_invisible_wm(
-            host_pil_image=img_pil,
-            watermark_mode=watermark_mode,
-            watermark_text=watermark_text if watermark_mode == 'text' else None,
-            watermark_pil_image=watermark_pil if watermark_mode == 'image' else None,
-            alpha=alpha
-        )
-
         # Now test robustness
         test_results = test_watermark_robustness(
-            watermarked_pil_image=watermarked_pil,
+            watermarked_pil_image=img_pil,
             watermark_mode=watermark_mode,
             watermark_text=watermark_text if watermark_mode == 'text' else None,
             watermark_pil_image=watermark_pil if watermark_mode == 'image' else None,
-            alpha=alpha
+            alpha=alpha,
+            redundancy=redundancy
         )
 
         print(f"✅ [ROBUSTNESS TEST] Completed {len(test_results['results'])} robustness tests")
@@ -963,7 +928,7 @@ def test_invisible_watermark_robustness():
             'watermark_size': test_results['watermark_size'],
             'redundancy': test_results['redundancy'],
             'alpha': test_results['alpha'],
-            'imperceptibility_psnr': test_results.get('imperceptibility_psnr'),  # <-- add this line
+            'imperceptibility_psnr': test_results.get('imperceptibility_psnr'),
             'image_name': name
         })
 
@@ -1223,177 +1188,6 @@ def apply_watermark_dwt():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '5001'))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=True)
-    port = int(os.getenv('PORT', '5001'))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=True)
-def apply_watermark_api():
-    """Apply watermark (image or text) to one or more images and return data URLs"""
-    # CORS preflight
-    if request.method == 'OPTIONS':
-        resp = jsonify({'message': 'CORS preflight'})
-        resp.headers.add('Access-Control-Allow-Origin', '*')
-        resp.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        resp.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        return resp
-
-    if not WATERMARK_AVAILABLE:
-        return jsonify({'error': 'WaterMarker not available on server'}), 500
-
-    # Accept JSON; log raw body length for debugging
-    try:
-        payload = request.get_json(force=True) or {}
-    except Exception:
-        print("❌ [WATERMARK] Invalid JSON body")
-        return jsonify({'error': 'Invalid JSON body'}), 400
-
-    # Normalize payload keys from various UIs
-    norm = _normalize_watermark_payload(payload)
-
-    images = norm.get('images') or []
-    mode = norm.get('mode', 'image')
-    pos = norm.get('pos', 'SE')
-    padding = norm.get('padding') or {'x': 20, 'xUnit': 'px', 'y': 5, 'yUnit': 'px'}
-    scale = bool(norm.get('scale', True))
-    opacity = float(norm.get('opacity', 0.5))
-    rotation = int(norm.get('rotation', 0))
-    text = norm.get('text')
-    text_size = int(norm.get('textSize', 32))
-    text_color = norm.get('textColor') or '#FFFFFF'
-    wm_path = norm.get('watermarkPath')
-    wm_data_url = norm.get('watermarkDataUrl')
-
-    if RUN_MAIN:
-        print("🔍 [WATERMARK] /api/watermark/apply called")
-        print(f"🔍 [WATERMARK] mode={mode}, pos={pos}, padding={padding}, scale={scale}, opacity={opacity}, rotation={rotation}, count={len(images)}")
-
-    if not isinstance(images, list) or len(images) == 0:
-        return jsonify({'error': 'images array is required'}), 400
-
-    if mode.lower() not in ('image', 'text'):
-        return jsonify({'error': "mode must be 'image' or 'text'"}), 400
-
-    # Prepare WaterMarker
-    tmp_wm_file = None
-    wm_init_path = None
-    try:
-        if mode.lower() == 'image':
-            if wm_path and os.path.isfile(wm_path):
-                wm_init_path = wm_path
-            elif wm_data_url:
-                # write to temp file
-                if ',' in wm_data_url:
-                    _, b64 = wm_data_url.split(',', 1)
-                else:
-                    b64 = wm_data_url
-                raw = base64.b64decode(b64)
-                fd, tmp_path = tempfile.mkstemp(suffix=".png")
-                os.close(fd)
-                with open(tmp_path, 'wb') as f:
-                    f.write(raw)
-                tmp_wm_file = tmp_path
-                wm_init_path = tmp_wm_file
-            else:
-                return jsonify({'error': 'watermarkPath or watermarkDataUrl required for image mode'}), 400
-        wm = WaterMarker(wm_init_path, overwrite=True)
-    except Exception as e:
-        if tmp_wm_file:
-            try: os.remove(tmp_wm_file)
-            except: pass
-        return jsonify({'error': f'Failed to initialize WaterMarker: {e}'}), 500
-
-    # Convert padding dict to tuple format expected by WaterMarker
-    try:
-        padding_tuple = ((int(padding.get('x', 20)), str(padding.get('xUnit', 'px'))),
-                         (int(padding.get('y', 5)), str(padding.get('yUnit', 'px'))))
-    except Exception:
-        return jsonify({'error': 'Invalid padding format'}), 400
-
-    out_images = []
-    try:
-        for idx, item in enumerate(images):
-            url = item.get('url')
-            name = item.get('name') or f'watermarked_{idx+1}.png'
-            if not url:
-                return jsonify({'error': f'image at index {idx} missing url'}), 400
-
-            try:
-                src = _decode_any_to_pil(url)
-            except Exception as e:
-                return jsonify({'error': f'Invalid image at index {idx}: {e}'}), 400
-
-            # Apply watermark in-memory with rotation support
-            try:
-                # If rotation is needed, we need to manually handle watermark application
-                if rotation and rotation != 0:
-                    # Prepare the watermark (image or text)
-                    image = src.convert("RGBA")
-                    
-                    if mode.lower() == "text" and text:
-                        # Create text watermark
-                        watermark_copy = wm.create_text_watermark(text, text_size, text_color, opacity)
-                    else:
-                        # Image watermark
-                        if scale and (not wm.previous_size or wm.previous_size != image.size):
-                            watermark_copy = wm.scale_watermark(image)
-                            needs_opacity = opacity < 1
-                        else:
-                            watermark_copy = (wm.watermark or PILImage.new("RGBA", (1, 1), (0, 0, 0, 0))).copy()
-                            needs_opacity = opacity < 1
-                        
-                        wm.previous_size = image.size
-                        
-                        if needs_opacity and watermark_copy.mode != "RGBA":
-                            watermark_copy = watermark_copy.convert("RGBA")
-                        if needs_opacity:
-                            watermark_copy = wm.change_opacity(watermark_copy, opacity)
-                    
-                    # Rotate the watermark (not the entire image!)
-                    # PIL rotates counter-clockwise by default, so negate for clockwise rotation
-                    watermark_copy = watermark_copy.rotate(-rotation, expand=True, fillcolor=(0, 0, 0, 0))
-                    
-                    # Get position and apply
-                    x, y = wm.get_watermark_position(image, watermark_copy, pos=pos, padding=padding_tuple)
-                    out_pil = image.copy()
-                    try:
-                        out_pil.paste(watermark_copy, box=(x, y), mask=watermark_copy)
-                    except ValueError:
-                        out_pil.paste(watermark_copy, box=(x, y))
-                    out_pil = out_pil.convert("RGBA")
-                else:
-                    # No rotation - use standard method
-                    out_pil = wm.apply_watermark_pil(
-                        pil_image=src,
-                        scale=scale,
-                        pos=pos,
-                        padding=padding_tuple,
-                        opacity=opacity,
-                        mode=mode.lower(),
-                        text=(text if mode.lower() == 'text' else None),
-                        text_size=text_size,
-                        text_color=text_color
-                    )
-                    
-            except Exception as e:
-                return jsonify({'error': f'Watermarking failed at index {idx}: {e}'}), 500
-
-            out_images.append({
-                'name': name,
-                'dataUrl': _pil_to_data_url(out_pil, fmt='PNG')
-            })
-    finally:
-        # Cleanup temp watermark
-        if tmp_wm_file:
-            try: os.remove(tmp_wm_file)
-            except: pass
-
-    if RUN_MAIN:
-        print(f"✅ [WATERMARK] Applied watermark to {len(out_images)} image(s)")
-
-    return jsonify({'images': out_images})
-
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', '5001'))
-    # Re-enable the reloader for auto-restart on code changes
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=True)
 
 

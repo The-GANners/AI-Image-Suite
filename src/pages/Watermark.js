@@ -298,17 +298,17 @@ const Watermark = () => {
         ...(token && { 'Authorization': `Bearer ${token}` })
       };
 
-      // Prepare payload - use first image for testing
+      // FIXED: Use ORIGINAL unwatermarked image for testing
       const firstImage = images[0];
       const imageDataUrl = await imageItemToDataUrl(firstImage);
       
       const payload = {
         images: [{
           name: firstImage.name || 'test.png',
-          dataUrl: imageDataUrl
+          url: imageDataUrl  // FIXED: Changed from 'dataUrl' to 'url' to match backend expectation
         }],
         watermarkMode: watermarkMode,
-        invisibleAlpha: invisibleAlpha
+        alpha: invisibleAlpha
       };
       
       if (watermarkMode === 'image') {
@@ -320,7 +320,7 @@ const Watermark = () => {
       }
 
       const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5001';
-      console.log('🧪 [ROBUSTNESS TEST] Starting robustness test...', { API_BASE });
+      console.log('🧪 [ROBUSTNESS TEST] Starting robustness test...', { API_BASE, alpha: invisibleAlpha });
 
       const res = await fetch(`${API_BASE}/api/watermark/test-robustness`, {
         method: 'POST',
@@ -1117,6 +1117,18 @@ const Watermark = () => {
                       <span className="text-gray-600 dark:text-gray-400">Redundancy:</span>
                       <span className="ml-2 font-medium">{robustnessResults.redundancy}</span>
                     </div>
+                    {/* NEW: Imperceptibility PSNR */}
+                    <div className="col-span-2">
+                      <span className="text-gray-600 dark:text-gray-400">Imperceptibility PSNR:</span>
+                      <span className="ml-2 font-medium text-green-600 dark:text-green-400">
+                        {robustnessResults.imperceptibility_psnr != null
+                          ? `${Number(robustnessResults.imperceptibility_psnr).toFixed(2)} dB`
+                          : 'N/A'}
+                      </span>
+                      <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                        (Original vs Watermarked)
+                      </span>
+                    </div>
                   </div>
 
                   {robustnessResults.original_image && (
@@ -1199,7 +1211,9 @@ const Watermark = () => {
                 <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
                   <h4 className="text-sm font-semibold mb-2 text-blue-900 dark:text-blue-100">Understanding the Results:</h4>
                   <ul className="text-xs text-blue-800 dark:text-blue-200 space-y-1">
-                    <li><strong>PSNR (Peak Signal-to-Noise Ratio):</strong> Measures image quality after attack. Higher is better. &gt;40 dB = Excellent, 30-40 dB = Good, &lt;30 dB = Poor</li>
+                    {/* NEW: Add imperceptibility PSNR explanation */}
+                    <li><strong>Imperceptibility PSNR:</strong> Measures how invisible the watermark is. &gt;40 dB = Excellent (invisible), 35-40 dB = Good, &lt;35 dB = Visible</li>
+                    <li><strong>Attack PSNR (Peak Signal-to-Noise Ratio):</strong> Measures image quality after attack. Higher is better. &gt;40 dB = Excellent, 30-40 dB = Good, &lt;30 dB = Poor</li>
                     <li><strong>NCC (Normalized Cross-Correlation):</strong> Measures watermark detectability. &gt;0.8 = Strong, 0.6-0.8 = Moderate, &lt;0.6 = Weak/Failed</li>
                     <li><strong>Success Threshold:</strong> NCC &gt; 0.6 indicates the watermark is still detectable after the attack</li>
                   </ul>

@@ -364,16 +364,20 @@ const TextToImage = () => {
               />
 
               {/* Disclaimer */}
-              <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
                 <div className="flex items-start space-x-2">
-                  <span className="text-amber-600 dark:text-amber-400 text-lg flex-shrink-0">ℹ️</span>
+                  <span className="text-blue-600 dark:text-blue-400 text-lg flex-shrink-0">💡</span>
                   <div>
-                    <p className="text-sm text-amber-800 dark:text-amber-300 font-medium mb-1">
-                      Important Information:
+                    <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-2">
+                      COCO Dataset - What Works Best:
                     </p>
-                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                      <strong>COCO Dataset:</strong> This model can only generate images for the 80 specific categories in the COCO dataset (e.g., "person," "car," "dog," "chair"). It does not understand synonyms or related items, which is why prompts like "a human figure" or "potato" will fail. For best results, please use exact COCO category names.
-                    </p>
+                    <div className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
+                      <p><strong>✅ Full Scene Descriptions:</strong> "A kitchen with white counters and wooden floor", "Train on tracks with water tower"</p>
+                      <p><strong>✅ Individual Objects:</strong> Vehicles (car, motorcycle, truck, bus, train etc), Animals (cat, dog, tiger, lion, bear, wolf, leopard, cheetah etc)</p>
+                      <p><strong>✅ Limited Food Items:</strong> Fruits (lemon, apple, orange, banana etc), "eggs and bacon on plate", "cupcakes", "donuts" etc </p>
+  
+                     
+                    </div>
                   </div>
                 </div>
               </div>

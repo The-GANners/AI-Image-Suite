@@ -15,7 +15,7 @@ import base64
 MODEL = 'haar'
 LEVEL = 1
 ALPHA = 0.38
-REDUNDANCY = 6
+REDUNDANCY = 3
 
 # =========================
 # Helpers
@@ -75,18 +75,18 @@ def inverse_dct(dct_array):
             out[i:i+8, j:j+8] = idct(idct(blk.T, norm="ortho").T, norm="ortho")
     return out
 
-def _prepare_capacity_and_wm(Y_channel, wm_gray):
+def _prepare_capacity_and_wm(Y_channel, wm_gray, redundancy=None):
     coeffs = pywt.wavedec2(Y_channel, MODEL, level=LEVEL)
     LL = coeffs[0]
-    h, w = LL.shape
-    blocks_h, blocks_w = (h // 8), (w // 8)
+    H, W = LL.shape
+    blocks_h, blocks_w = (H // 8), (W // 8)
     cap_blocks = blocks_h * blocks_w
 
-    redundancy = REDUNDANCY
-    s = int(np.floor(np.sqrt(max(1, cap_blocks // redundancy))))
+    red = int(redundancy) if (redundancy is not None) else REDUNDANCY
+    s = int(np.floor(np.sqrt(max(1, cap_blocks // red))))
     if s < 4:
         s = 4
-        redundancy = max(1, cap_blocks // (s * s))
+        red = max(1, cap_blocks // (s * s))
 
     wm_img = Image.fromarray(np.uint8(np.clip(wm_gray, 0, 255)))
     wm_resized = wm_img.resize((s, s), Image.Resampling.LANCZOS)
@@ -94,7 +94,7 @@ def _prepare_capacity_and_wm(Y_channel, wm_gray):
     thr = float(np.median(wm_arr))
     bits01 = (wm_arr >= thr).astype(np.uint8)
     ref_map = (bits01 * 2 - 1).astype(np.float64)
-    return ref_map, s, (h, w), redundancy
+    return ref_map, s, (H, W), red
 
 def _coeff_strength_from_ll(dct_ll):
     a = np.abs(dct_ll[3::8, 4::8]).flatten()
@@ -129,18 +129,18 @@ def embed_watermark_dwt_dct(Y_channel, ref_map, alpha=ALPHA, redundancy=REDUNDAN
         margin *= 1.05
 
     bits = ref_map.flatten()
-    h, w = dct_ll.shape
-    needed_blocks = int(bits.size * redundancy)
+    H, W = dct_ll.shape
+    needed_blocks = int(bits.size * int(redundancy))
     idx = 0
     bit_idx = 0
-    for i in range(0, h, 8):
-        for j in range(0, w, 8):
+    for i in range(0, H, 8):
+        for j in range(0, W, 8):
             if bit_idx >= bits.size or idx >= needed_blocks:
                 break
             blk = dct_ll[i:i+8, j:j+8]
             dct_ll[i:i+8, j:j+8] = _embed_pair_margin(blk, bits[bit_idx], margin)
             idx += 1
-            if idx % redundancy == 0:
+            if idx % int(redundancy) == 0:
                 bit_idx += 1
         if bit_idx >= bits.size or idx >= needed_blocks:
             break
@@ -154,33 +154,36 @@ def extract_watermark_dwt_dct(Y_channel, wm_size, redundancy=REDUNDANCY):
     LL = coeffs[0]
     dct_ll = apply_dct(LL)
 
-    h, w = dct_ll.shape
+    H, W = dct_ll.shape
     votes = np.zeros((wm_size * wm_size,), dtype=np.int32)
     idx = 0
-    for i in range(0, h, 8):
-        for j in range(0, w, 8):
-            bit_index = idx // redundancy
+    for i in range(0, H, 8):
+        for j in range(0, W, 8):
+            bit_index = idx // int(redundancy)
             if bit_index >= votes.size:
                 break
             blk = dct_ll[i:i+8, j:j+8]
             diff = blk[3, 4] - blk[4, 3]
             votes[bit_index] += 1 if diff >= 0 else -1
             idx += 1
-        if (idx // redundancy) >= votes.size:
+        if (idx // int(redundancy)) >= votes.size:
             break
 
     bits = np.where(votes >= 0, 1.0, -1.0)
     return bits.reshape(wm_size, wm_size)
 
-def embed_watermark_color(host_rgb, watermark_gray, alpha=ALPHA):
+def embed_watermark_color(host_rgb, watermark_gray, alpha=None, redundancy=None):
+    # defaults
+    alpha = float(alpha) if (alpha is not None) else ALPHA
     Y, Cr, Cb = rgb_to_ycbcr(host_rgb)
-    ref_map, wm_size, _, redundancy = _prepare_capacity_and_wm(Y, watermark_gray)
-    Y_wm = embed_watermark_dwt_dct(Y, ref_map, alpha, redundancy)
-    return ycbcr_to_rgb(Y_wm, Cr, Cb), ref_map, wm_size, redundancy
+    ref_map, wm_size, _, eff_red = _prepare_capacity_and_wm(Y, watermark_gray, redundancy=redundancy)
+    Y_wm = embed_watermark_dwt_dct(Y, ref_map, alpha=alpha, redundancy=eff_red)
+    return ycbcr_to_rgb(Y_wm, Cr, Cb), ref_map, wm_size, eff_red
 
-def extract_watermark_color(wm_rgb, wm_size, redundancy=REDUNDANCY):
+def extract_watermark_color(wm_rgb, wm_size, redundancy=None):
     Y, _, _ = rgb_to_ycbcr(wm_rgb)
-    return extract_watermark_dwt_dct(Y, wm_size, redundancy)
+    eff_red = int(redundancy) if (redundancy is not None) else REDUNDANCY
+    return extract_watermark_dwt_dct(Y, wm_size, redundancy=eff_red)
 
 # =========================
 # Attacks and metrics
@@ -221,33 +224,33 @@ def measure_ncc(original_wm, recovered_wm):
 # Public API
 # =========================
 def apply_invisible_watermark(host_pil_image, watermark_mode, watermark_text=None,
-                              watermark_pil_image=None, alpha=None):
+                              watermark_pil_image=None, alpha=None, redundancy=None):
     """
     Returns a PIL Image only (no tuple) to remain compatible with callers that call .save().
     """
-    alpha = ALPHA
+    alpha = float(alpha) if (alpha is not None) else ALPHA
     host_rgb = np.array(host_pil_image.convert('RGB'), dtype=np.uint8)
     if watermark_mode == 'text':
         wm_gray = create_text_watermark(watermark_text or 'Copyright', 256)
     else:
         wm_gray = load_watermark_image_from_pil(watermark_pil_image, 256)
-    wm_host_rgb, _, _, _ = embed_watermark_color(host_rgb, wm_gray, alpha)
+    wm_host_rgb, _, _, eff_red = embed_watermark_color(host_rgb, wm_gray, alpha=alpha, redundancy=redundancy)
     result = Image.fromarray(wm_host_rgb)
-    # Optionally attach meta (non-breaking)
     try:
         psnr = measure_psnr(host_rgb, wm_host_rgb)
         result.info['imperceptibility_psnr'] = round(float(psnr), 2)
+        result.info['alpha'] = round(float(alpha), 4)
+        result.info['redundancy'] = int(eff_red)
     except Exception:
         pass
     return result
 
 def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_text=None,
-                              watermark_pil_image=None, alpha=None):
+                              watermark_pil_image=None, alpha=None, redundancy=None):
     """
-    Compute imperceptibility PSNR exactly as in watermarkdwt.py:
-    PSNR(original_host_rgb, watermarked_rgb), then run attacks and return results.
+    Compute imperceptibility PSNR from original vs watermarked, then run attacks and return results.
     """
-    alpha = ALPHA
+    alpha = float(alpha) if (alpha is not None) else ALPHA
     # Treat provided image as ORIGINAL HOST
     if watermarked_pil_image.mode != 'RGB':
         watermarked_pil_image = watermarked_pil_image.convert('RGB')
@@ -263,10 +266,10 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
 
     # Capacity and ref map (based on HOST)
     Y_host = cv2.cvtColor(host_rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float64)
-    ref_map, wm_size, _, redundancy = _prepare_capacity_and_wm(Y_host, wm_gray_raw)
+    ref_map, wm_size, _, eff_red = _prepare_capacity_and_wm(Y_host, wm_gray_raw, redundancy=redundancy)
 
-    # Embed first to obtain watermarked image (for PSNR and attacks)
-    wm_host_rgb, _, _, _ = embed_watermark_color(host_rgb, wm_gray_raw, alpha)
+    # Embed with provided alpha/redundancy
+    wm_host_rgb, _, _, _ = embed_watermark_color(host_rgb, wm_gray_raw, alpha=alpha, redundancy=eff_red)
     imperceptibility_psnr = measure_psnr(host_rgb, wm_host_rgb)
     print(f"   ✅ Imperceptibility PSNR: {imperceptibility_psnr:.2f} dB (computed from original vs watermarked)")
 
@@ -275,7 +278,7 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
 
     # Test 1: Original (no attack)
     try:
-        recovered_wm_orig = extract_watermark_color(wm_host_rgb, wm_size, redundancy)
+        recovered_wm_orig = extract_watermark_color(wm_host_rgb, wm_size, redundancy=eff_red)
         ncc_orig = measure_ncc(wm_binary, recovered_wm_orig)
         results.append({
             'attack': 'Original (No Attack)',
@@ -298,7 +301,7 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         try:
             attacked_rgb = attack_jpeg(wm_host_rgb, quality)
             psnr = measure_psnr(wm_host_rgb, attacked_rgb)
-            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy)
+            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy=eff_red)
             ncc = measure_ncc(wm_binary, recovered)
             results.append({
                 'attack': f'JPEG Compression (Q={quality})',
@@ -321,7 +324,7 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         try:
             attacked_rgb = attack_noise(wm_host_rgb, sigma)
             psnr = measure_psnr(wm_host_rgb, attacked_rgb)
-            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy)
+            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy=eff_red)
             ncc = measure_ncc(wm_binary, recovered)
             results.append({
                 'attack': f'Gaussian Noise (σ={sigma})',
@@ -344,7 +347,7 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         try:
             attacked_rgb = attack_blur(wm_host_rgb, sigma)
             psnr = measure_psnr(wm_host_rgb, attacked_rgb)
-            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy)
+            recovered = extract_watermark_color(attacked_rgb, wm_size, redundancy=eff_red)
             ncc = measure_ncc(wm_binary, recovered)
             results.append({
                 'attack': f'Gaussian Blur (σ={sigma})',
@@ -371,105 +374,7 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         'results': results,
         'original_image': f'data:image/png;base64,{img_b64}',
         'watermark_size': int(wm_size),
-        'redundancy': int(redundancy),
+        'redundancy': int(eff_red),
         'alpha': float(alpha),
         'imperceptibility_psnr': round(float(imperceptibility_psnr), 2)
     }
-
-# =========================
-# MAIN EVALUATION (for CLI)
-# =========================
-def run_evaluation():
-    import os
-    print("="*60)
-    print(" DWT+DCT WATERMARKING EVALUATION")
-    print(f" Mode: {WATERMARK_MODE.upper()}")
-    print("="*60)
-    
-    host_rgb = load_image(IMAGE_HOST, HOST_SIZE)
-    print(f"\n✓ Host image loaded: {host_rgb.shape}")
-    
-    # Prepare watermark (raw grayscale 0..255)
-    if WATERMARK_MODE == 'image':
-        if not os.path.exists(IMAGE_WATERMARK):
-            print(f"❌ ERROR: Watermark image not found: {IMAGE_WATERMARK}")
-            return
-        wm_gray_raw = load_watermark_image(IMAGE_WATERMARK, 256)
-        print(f"✓ Image watermark loaded (pre): {wm_gray_raw.shape}")
-    elif WATERMARK_MODE == 'text':
-        wm_gray_raw = create_text_watermark(WATERMARK_TEXT, 256)
-        print(f"✓ Text watermark created: '{WATERMARK_TEXT}'")
-        Image.fromarray(np.uint8(wm_gray_raw)).save('./result/text_watermark.png')
-    else:
-        print(f"❌ ERROR: Invalid mode '{WATERMARK_MODE}'. Use 'image' or 'text'.")
-        return
-    
-    # Embed (capacity-aware)
-    wm_host_rgb, ref_map, wm_size, redundancy = embed_watermark_color(host_rgb, wm_gray_raw, ALPHA)
-    Image.fromarray(wm_host_rgb).save('./result/watermarked.png')
-    print(f"✓ Watermarked image saved: ./result/watermarked.png")
-    print(f"Effective watermark size (capacity-matched, redundancy={redundancy}): {wm_size}x{wm_size}")
-    
-    # --- IMPERCEPTIBILITY ---
-    print("\n" + "="*60)
-    print(" IMPERCEPTIBILITY TEST")
-    print("="*60)
-    psnr = measure_psnr(host_rgb, wm_host_rgb)
-    print(f"PSNR: {psnr:.2f} dB")
-    if psnr >= 40:
-        print("✅ EXCELLENT - Watermark is invisible")
-    elif psnr >= 35:
-        print("✅ GOOD - Watermark is barely noticeable")
-    else:
-        print("⚠️  FAIR - Some degradation visible")
-    
-    # --- ROBUSTNESS ---
-    print("\n" + "="*60)
-    print(" ROBUSTNESS TEST (NCC)")
-    print("="*60)
-    
-    # Baseline
-    extracted_baseline = extract_watermark_color(wm_host_rgb, wm_size, redundancy)
-    vis = ((extracted_baseline + 1.0) * 0.5 * 255.0).astype(np.uint8)
-    Image.fromarray(vis).save('./result/extracted_baseline.png')
-    ncc_baseline = measure_ncc(ref_map, extracted_baseline)
-    print(f"Baseline (No Attack):           NCC = {ncc_baseline:.4f}")
-    
-    # Attacks
-    attacks = [
-        ('JPEG Q=85', lambda: attack_jpeg(wm_host_rgb, 85)),
-        ('JPEG Q=70', lambda: attack_jpeg(wm_host_rgb, 70)),
-        ('JPEG Q=50', lambda: attack_jpeg(wm_host_rgb, 50)),
-        ('Noise σ=0.03', lambda: attack_noise(wm_host_rgb, 0.03)),
-        ('Noise σ=0.06', lambda: attack_noise(wm_host_rgb, 0.06)),
-        ('Blur σ=0.8', lambda: attack_blur(wm_host_rgb, 0.8)),
-        ('Blur σ=1.2', lambda: attack_blur(wm_host_rgb, 1.2)),
-    ]
-    
-    ncc_scores = []
-    for name, attack_fn in attacks:
-        attacked = attack_fn()
-        extracted = extract_watermark_color(attacked, wm_size, redundancy)
-        ncc = measure_ncc(ref_map, extracted)
-        ncc_scores.append(ncc)
-        print(f"{name:<25} NCC = {ncc:.4f}")
-    
-    avg_ncc = float(np.mean(ncc_scores))
-    print(f"\n{'Average NCC (Attacks):':<25} {avg_ncc:.4f}")
-    
-    if avg_ncc >= 0.7:
-        print("✅ HIGHLY ROBUST - Survives most attacks")
-    elif avg_ncc >= 0.5:
-        print("✅ MODERATELY ROBUST - Survives light attacks")
-    else:
-        print("⚠️  WEAK - Watermark easily destroyed")
-    
-    print("\n" + "="*60)
-    print(" EVALUATION COMPLETE")
-    print("="*60)
-    print(f"Mode: {WATERMARK_MODE}")
-    print(f"Watermarked: ./result/watermarked.png")
-    print(f"Extracted: ./result/extracted_baseline.png")
-
-if __name__ == "__main__":
-    run_evaluation()
