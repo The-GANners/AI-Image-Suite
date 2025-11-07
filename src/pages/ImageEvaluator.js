@@ -789,7 +789,7 @@ const ImageEvaluator = () => {
           <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
             Image Quality Evaluation
           </h1>
-          <p className="text-gray-600 text-lg max-w-2xl mx-auto">
+          <p className="text-gray-600 text-lg max-w-2xl mx-auto dark:text-white">
             Analyze how well your AI-generated images match their text prompts using 
             advanced CLIP-based semantic understanding.
           </p>
@@ -964,9 +964,9 @@ const ImageEvaluator = () => {
                 {...getRootProps()}
                 className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${
                   isDragActive 
-                    ? 'border-primary-400 bg-primary-50' 
-                    : 'border-gray-300 hover:border-primary-400'
-                } ${isAutoMode ? 'border-blue-300 bg-blue-50' : ''}`}
+                    ? 'border-primary-400 bg-primary-50 dark:bg-primary-900' 
+                    : 'border-gray-300 hover:border-primary-400 dark:border-gray-600'
+                } ${isAutoMode ? 'border-blue-300 bg-blue-50 dark:bg-blue-900' : ''}`}
               >
                 <input {...getInputProps()} />
                 {image ? (
@@ -976,18 +976,18 @@ const ImageEvaluator = () => {
                       alt="Uploaded" 
                       className="max-h-64 mx-auto rounded-lg shadow-sm"
                     />
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-600 dark:text-white">
                       {isAutoMode ? 'Auto-loaded from generation' : 'Click or drag to replace image'}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <CloudArrowUpIcon className="w-12 h-12 text-gray-400 mx-auto" />
+                    <CloudArrowUpIcon className="w-12 h-12 text-gray-400 dark:text-gray-300 mx-auto" />
                     <div>
-                      <p className="text-lg text-gray-600 mb-2">
+                      <p className="text-lg text-gray-600 dark:text-white mb-2">
                         {isDragActive ? 'Drop your image here' : 'Drag & drop an image here'}
                       </p>
-                      <p className="text-sm text-gray-400">
+                      <p className="text-sm text-gray-400 dark:text-gray-200">
                         or click to select • PNG, JPG, JPEG, WebP
                       </p>
                     </div>
@@ -1206,12 +1206,12 @@ const ImageEvaluator = () => {
                   {evaluation.detailedMetrics && (
                     <div className="mt-4 text-xs text-gray-500 space-y-1">
                       <div className="flex justify-between">
-                        <span>Raw CLIP Score:</span>
-                        <span className="font-mono">{evaluation.detailedMetrics.raw_score?.toFixed(4)}</span>
+                        <span className="dark:text-gray-200">Raw CLIP Score:</span>
+                        <span className="font-mono dark:text-gray-200">{evaluation.detailedMetrics.raw_score?.toFixed(4)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Average Score:</span>
-                        <span className="font-mono">{evaluation.detailedMetrics.average_score?.toFixed(4)}</span>
+                        <span className="dark:text-gray-200">Average Score:</span>
+                        <span className="font-mono dark:text-gray-200">{evaluation.detailedMetrics.average_score?.toFixed(4)}</span>
                       </div>
                     </div>
                   )}
@@ -1315,8 +1315,8 @@ const ImageEvaluator = () => {
               </>
             ) : (
               <div className="card p-6 text-center text-gray-500">
-                <ChartBarIcon className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p>
+                <ChartBarIcon className="w-12 h-12 mx-auto mb-4 text-gray-400 dark:text-gray-200" />
+                <p className="dark:text-white">
                   {isAutoMode 
                     ? isAutoEvaluating
                       ? `Auto-evaluating Image ${currentImageIndex + 1}...`
@@ -1324,7 +1324,7 @@ const ImageEvaluator = () => {
                     : 'Upload an image and enter a prompt to see evaluation results'
                   }
                 </p>
-                <p className="text-xs mt-2">Using Module-2 CLIP-based evaluation</p>
+                <p className="text-xs mt-2 dark:text-gray-200">Using Module-2 CLIP-based evaluation</p>
               </div>
             )}
           </div>
@@ -1334,7 +1334,7 @@ const ImageEvaluator = () => {
         {!isAutoMode && manualUploadedImages.length > 0 && (
           <div className="text-center mb-4">
             <div className="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-800 rounded-full text-sm">
-              Manual Batch: Image {manualIndex + 1} of {manualUploadedImages.length}
+              <span className="dark:text-white">Manual Batch: Image {manualIndex + 1} of {manualUploadedImages.length}</span>
             </div>
           </div>
         )}

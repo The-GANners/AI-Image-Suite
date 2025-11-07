@@ -452,49 +452,59 @@ const TextToImage = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Number of Images
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.batchSize}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      // Only allow digits
-                      if (value === '' || /^\d+$/.test(value)) {
-                        const numValue = value === '' ? 1 : parseInt(value, 10);
-                        // Clamp between 1 and n
-                        if (numValue >= 1 && numValue <= 50) {
-                          setSettings({...settings, batchSize: numValue});
-                          setShowBatchSizeWarning(false);
-                        } else if (numValue > 50) {
-                          setSettings({...settings, batchSize: 50});
-                          setShowBatchSizeWarning(true);
-                          setTimeout(() => setShowBatchSizeWarning(false), 3000);
-                        } else if (value !== '') {
-                          setSettings({...settings, batchSize: 1});
-                          setShowBatchSizeWarning(true);
-                          setTimeout(() => setShowBatchSizeWarning(false), 3000);
-                        }
-                      }
-                    }}
-                    onBlur={(e) => {
-                      // Ensure valid number on blur
-                      if (e.target.value === '' || parseInt(e.target.value, 10) < 1) {
-                        setSettings({...settings, batchSize: 1});
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Number of Images
+                </label>
+                <input
+                  type="text"
+                  value={settings.batchSize}
+                  onChange={(e) => {
+                    const value = e.target.value;
+
+                    // NEW: Allow empty string for typing.
+                    // The onBlur handler will fix it if left empty.
+                    if (value === '') {
+                      setSettings({...settings, batchSize: ''});
+                      setShowBatchSizeWarning(false);
+                      return;
+                    }
+
+                    // Check for valid digits
+                    if (/^\d+$/.test(value)) {
+                      const numValue = parseInt(value, 10);
+                      
+                      if (numValue > 50) {
+                        // Clamp at 50
+                        setSettings({...settings, batchSize: 50});
+                        setShowBatchSizeWarning(true);
+                        setTimeout(() => setShowBatchSizeWarning(false), 3000);
+                      } else {
+                        // Store any other valid number (including 0 or 1)
+                        // The onBlur handler will fix 0
+                        setSettings({...settings, batchSize: numValue});
                         setShowBatchSizeWarning(false);
                       }
-                    }}
-                    placeholder="1-50"
-                    className="input"
-                    disabled={isGenerating}
-                  />
-                  {showBatchSizeWarning && (
-                    <p className="mt-2 text-sm text-red-600 dark:text-red-400 animate-fade-in">
-                      ⚠️ Please enter a number between 1 and 50
-                    </p>
-                  )}
-                </div>
+                    }
+                    // If not a digit (e.g., 'a', '1.5'), do nothing
+                  }}
+                  onBlur={(e) => {
+                    // Ensure valid number on blur
+                    // This logic is now correct, as it handles the empty string or 0
+                    if (e.target.value === '' || parseInt(e.target.value, 10) < 1) {
+                      setSettings({...settings, batchSize: 1});
+                      setShowBatchSizeWarning(false);
+                    }
+                  }}
+                  placeholder="1-50"
+                  className="input"
+                  disabled={isGenerating}
+                />
+                {showBatchSizeWarning && (
+                  <p className="mt-2 text-sm text-red-600 dark:text-red-400 animate-fade-in">
+                    ⚠️ Please enter a number between 1 and 50
+                  </p>
+                )}
+              </div>
 
                 <div>
                   {/* Seed input removed: seeds are now auto-generated per image */}

@@ -34,7 +34,7 @@ const Watermark = () => {
   const [watermarkMode, setWatermarkMode] = useState('image'); // 'image' | 'text'
   const [watermarkFile, setWatermarkFile] = useState(null);
   const [watermarkText, setWatermarkText] = useState('Sample Watermark');
-  const [textSize, setTextSize] = useState(32);
+  const [textSize, setTextSize] = useState(60);
   const [textColor, setTextColor] = useState('#FFFFFF');
   const [invisibleAlpha, setInvisibleAlpha] = useState(0.28); // Embedding strength for invisible watermark
   
@@ -718,32 +718,30 @@ const Watermark = () => {
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Text size
                         </label>
-                        <input 
-                          type="text" 
-                          className="input w-24" 
-                          value={textSize} 
-                          onChange={(e)=> {
-                            const value = e.target.value;
-                            // Only allow digits
-                            if (value === '' || /^\d+$/.test(value)) {
-                              const numValue = value === '' ? 32 : parseInt(value, 10);
-                              // Clamp between 6 and 200
-                              if (numValue >= 6 && numValue <= 200) {
-                                setTextSize(numValue);
-                              } else if (numValue > 200) {
-                                setTextSize(200);
-                              } else if (numValue < 6 && value !== '') {
-                                setTextSize(6);
+                        <input
+                          type="text"
+                          className="input w-24"
+                          value={textSize}
+                          onChange={e => {
+                            let v = e.target.value;
+                            // Allow empty for typing
+                            if (v === '') {
+                              setTextSize('');
+                            } else {
+                              // Only allow numbers
+                              if (/^\d{0,3}$/.test(v)) {
+                                setTextSize(v);
                               }
                             }
                           }}
-                          onBlur={(e) => {
-                            // Ensure valid number on blur
-                            if (e.target.value === '' || parseInt(e.target.value, 10) < 6) {
-                              setTextSize(32);
-                            }
+                          onBlur={e => {
+                            let num = parseInt(e.target.value, 10);
+                            if (isNaN(num) || num < 30) setTextSize(30);
+                            else if (num > 200) setTextSize(200);
+                            else setTextSize(num);
                           }}
-                          placeholder="6-200" 
+                          placeholder="30-200"
+                          inputMode="numeric"
                         />
                       </div>
                       <div>
