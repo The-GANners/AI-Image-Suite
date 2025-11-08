@@ -273,10 +273,12 @@ const Watermark = () => {
     processedImages.forEach(image => {
       const link = document.createElement('a');
       link.href = image.downloadUrl;
-      link.download = image.processedName;
+      // FORCE PNG extension to prevent browser JPEG conversion
+      const forcedName = image.processedName.replace(/\.(jpg|jpeg)$/i, '.png');
+      link.download = forcedName;
       link.click();
     });
-    toast.success('Download started for all images');
+    toast.success(`Downloading ${processedImages.length} image(s) as PNG (lossless)`);
   };
 
   const handleTestRobustness = async () => {

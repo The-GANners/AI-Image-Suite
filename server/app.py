@@ -806,7 +806,7 @@ def apply_invisible_watermark():
         return resp
 
     try:
-        from invisible_watermark import apply_invisible_watermark as apply_inv_wm, test_watermark_robustness
+        from invisible_watermark import apply_invisible_watermark as apply_inv_wm, extract_watermark_color, measure_ncc
     except ImportError:
         return jsonify({'error': 'Invisible watermarking not available. Install required packages: pywt, scipy, scikit-image'}), 500
 
@@ -827,7 +827,13 @@ def apply_invisible_watermark():
     alpha = payload.get('alpha', None)
     redundancy = payload.get('redundancy', None)
 
+    # NEW: Create uploads directory for this session
+    uploads_dir = Path(__file__).parent / 'uploads' / f'invisible_{uuid.uuid4().hex[:8]}'
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    
     out_images = []
+    saved_paths = []
+    
     for idx, item in enumerate(images):
         try:
             name = item.get('name') or f'image_{idx+1}.png'
@@ -847,13 +853,132 @@ def apply_invisible_watermark():
                 alpha=alpha,
                 redundancy=redundancy
             )
+            
+            # Get metadata from result
+            wm_size = result.info.get('watermark_size')
+            red = result.info.get('redundancy')
+            wm_text = result.info.get('watermark_text', '')
+            
+            # CRITICAL: Save with ZERO compression via cv2 (preserves exact pixels)
+            safe_name = name.replace('/', '_').replace('\\', '_')
+            file_path = uploads_dir / safe_name
+            
+            # Step 1: Save pixel data with cv2 (lossless, no conversions)
+            if hasattr(result, '_watermarked_array'):
+                wm_bgr = cv2.cvtColor(result._watermarked_array, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(str(file_path), wm_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+                print(f"✅ [INVISIBLE WM] Saved via cv2 (raw array) to: {file_path}")
+            else:
+                # Fallback: PIL save
+                if hasattr(result, 'pnginfo') and result.pnginfo:
+                    result.save(file_path, format='PNG', pnginfo=result.pnginfo, optimize=False, compress_level=0)
+                else:
+                    result.save(file_path, format='PNG', optimize=False, compress_level=0)
+                print(f"✅ [INVISIBLE WM] Saved via PIL (fallback) to: {file_path}")
+            
+            # Step 2: Add PNG text chunks WITHOUT re-encoding pixels
+            try:
+                import struct
+                import zlib
+                
+                # Read the PNG file as binary
+                with open(file_path, 'rb') as f:
+                    png_data = bytearray(f.read())
+                
+                # PNG signature
+                PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+                
+                if not png_data.startswith(PNG_SIGNATURE):
+                    raise ValueError("Not a valid PNG file")
+                
+                # Helper function to create PNG text chunk
+                def create_text_chunk(keyword, text):
+                    keyword_bytes = keyword.encode('latin-1')
+                    text_bytes = text.encode('utf-8')
+                    chunk_data = keyword_bytes + b'\x00' + text_bytes
+                    
+                    # Calculate CRC
+                    chunk_type = b'tEXt'
+                    crc = zlib.crc32(chunk_type + chunk_data) & 0xffffffff
+                    
+                    # Build chunk: length + type + data + CRC
+                    chunk = struct.pack('>I', len(chunk_data)) + chunk_type + chunk_data + struct.pack('>I', crc)
+                    return chunk
+                
+                # Create metadata chunks
+                metadata_chunks = [
+                    create_text_chunk('watermark_size', str(wm_size)),
+                    create_text_chunk('redundancy', str(red)),
+                    create_text_chunk('watermark_text', str(wm_text)),
+                    create_text_chunk('alpha', str(result.info.get('alpha', alpha))),
+                    create_text_chunk('imperceptibility_psnr', str(result.info.get('imperceptibility_psnr', '')))
+                ]
+                
+                # Find IEND chunk (last 12 bytes: length(4) + type(4) + CRC(4))
+                iend_pos = png_data.rfind(b'IEND')
+                if iend_pos == -1:
+                    raise ValueError("IEND chunk not found")
+                
+                # Insert metadata chunks BEFORE IEND
+                insert_pos = iend_pos - 4  # Before the IEND length bytes
+                for chunk in metadata_chunks:
+                    png_data[insert_pos:insert_pos] = chunk
+                
+                # Write modified PNG
+                with open(file_path, 'wb') as f:
+                    f.write(png_data)
+                
+                print(f"   ✅ Added PNG metadata to saved file (direct chunk injection)")
+            except Exception as meta_err:
+                print(f"   ⚠️ Failed to add PNG metadata: {meta_err}")
+                # Don't fail the entire operation if metadata fails
+            
+            # VERIFICATION: Read back and test extraction
+            try:
+                verify_img = Image.open(file_path)
+                verify_rgb = np.array(verify_img.convert('RGB'))
+                
+                # Extract watermark from saved file
+                verify_extracted = extract_watermark_color(verify_rgb, wm_size, redundancy=red)
+                
+                # Compare with original reference map
+                if hasattr(result, '_ref_map'):
+                    verify_ncc = measure_ncc(result._ref_map, verify_extracted)
+                elif hasattr(result, '_watermarked_array'):
+                    mem_extracted = extract_watermark_color(result._watermarked_array, wm_size, redundancy=red)
+                    verify_ncc = measure_ncc(mem_extracted, verify_extracted)
+                else:
+                    verify_ncc = None
+                
+                if verify_ncc is not None:
+                    print(f"   🔍 Post-save verification NCC: {verify_ncc:.4f}")
+                    
+                    if verify_ncc < 0.9:
+                        print(f"   ⚠️ WARNING: Watermark degraded after save! NCC dropped to {verify_ncc:.4f}")
+                    else:
+                        print(f"   ✅ Watermark preserved after save (NCC={verify_ncc:.4f})")
+            except Exception as verify_err:
+                print(f"   ⚠️ Post-save verification failed: {verify_err}")
+            
+            saved_paths.append(file_path)
+            
+            print(f"   Metadata: size={wm_size}, red={red}, text='{wm_text}'")
+            
+            # Convert to base64 for frontend
             buf = io.BytesIO()
-            result.save(buf, format='PNG')
-            out_images.append({ 'name': name, 'dataUrl': f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}" })
+            result.save(buf, format='PNG', compress_level=0)
+            out_images.append({ 
+                'name': name, 
+                'dataUrl': f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}",
+                'serverPath': str(file_path)  # NEW: Include server path in response
+            })
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return jsonify({ 'error': f'Invisible watermarking failed at index {idx}: {e}' }), 400
 
-    return jsonify({ 'images': out_images })
+    print(f"✅ [INVISIBLE WM] Saved {len(saved_paths)} images to: {uploads_dir}")
+    return jsonify({ 'images': out_images, 'uploads_dir': str(uploads_dir) })
 
 @app.route('/api/watermark/test-robustness', methods=['POST', 'OPTIONS'], endpoint='watermark_test_robustness')
 def test_invisible_watermark_robustness():
@@ -1197,6 +1322,76 @@ def apply_watermark_dwt():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/watermark/debug-extract-latest', methods=['GET'])
+def debug_extract_latest():
+    """Debug endpoint: Extract watermark from most recent uploaded image"""
+    try:
+        from invisible_watermark import extract_watermark_dwt_dct, rgb_to_ycbcr
+        import os
+        from pathlib import Path
+        
+        # Find most recent image
+        uploads_dir = Path(__file__).parent / 'uploads'
+        all_images = []
+        for root, dirs, files in os.walk(uploads_dir):
+            for file in files:
+                if file.lower().endswith('.png'):
+                    full_path = Path(root) / file
+                    all_images.append(full_path)
+        
+        if not all_images:
+            return jsonify({'error': 'No images found in uploads'}), 404
+        
+        all_images.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        img_path = all_images[0]
+        
+        img = Image.open(img_path)
+        
+        # NEW: Try reading PNG text chunks (where metadata is actually stored)
+        wm_size = None
+        redundancy = None
+        watermark_text = None
+        
+        if hasattr(img, 'text'):
+            # PNG text chunks (the REAL metadata)
+            wm_size = int(img.text.get('watermark_size', 9))
+            redundancy = int(img.text.get('redundancy', 3))
+            watermark_text = img.text.get('watermark_text', '')
+        
+        # Fallback to .info dict (only works for in-memory images)
+        if wm_size is None:
+            wm_size = img.info.get('watermark_size', 9)
+            redundancy = img.info.get('redundancy', 3)
+            watermark_text = img.info.get('watermark_text', '')
+        
+        print(f"🔍 [DEBUG] Extracted metadata: size={wm_size}, red={redundancy}, text='{watermark_text}'")
+        
+        # Extract
+        wm_rgb = np.array(img.convert('RGB'))
+        Y, _, _ = rgb_to_ycbcr(wm_rgb)
+        extracted = extract_watermark_dwt_dct(Y, wm_size, redundancy)
+        
+        density = float(np.mean(extracted > 0))
+        
+        return jsonify({
+            'file': str(img_path),
+            'metadata': {
+                'watermark_size': wm_size,
+                'redundancy': redundancy,
+                'watermark_text': watermark_text
+            },
+            'extraction': {
+                'shape': extracted.shape,
+                'density': round(density, 4),
+                'unique_values': [float(v) for v in np.unique(extracted)],
+                'pattern_preview': extracted[:3, :3].tolist()
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '5001'))

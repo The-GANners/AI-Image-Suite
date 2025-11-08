@@ -88,12 +88,61 @@ def _prepare_capacity_and_wm(Y_channel, wm_gray, redundancy=None):
         s = 4
         red = max(1, cap_blocks // (s * s))
 
+    # Resize watermark to target embedding grid
     wm_img = Image.fromarray(np.uint8(np.clip(wm_gray, 0, 255)))
     wm_resized = wm_img.resize((s, s), Image.Resampling.LANCZOS)
     wm_arr = np.array(wm_resized, dtype=np.float64)
-    thr = float(np.median(wm_arr))
-    bits01 = (wm_arr >= thr).astype(np.uint8)
-    ref_map = (bits01 * 2 - 1).astype(np.float64)
+
+    # FIXED: Robust binarization using adaptive percentile on NON-ZERO values
+    wm_u8 = np.clip(wm_arr, 0, 255).astype(np.uint8)
+    nz = wm_u8[wm_u8 > 0]
+    
+    if nz.size < 3:
+        # Degenerate case: almost all black → force checkerboard
+        bits01 = np.ones((s, s), dtype=np.uint8)
+        bits01[::2, 1::2] = 0
+        bits01[1::2, ::2] = 0
+        thr_val = 0
+    else:
+        # Use 40th percentile of non-zero pixels as threshold
+        # This ensures ~40% of non-zero pixels become 1s, rest 0s
+        thr_val = np.percentile(nz, 40)
+        bits01 = (wm_u8 >= thr_val).astype(np.uint8)
+    
+    density = float(bits01.mean())
+    
+    # Safety net: if still extreme, apply minimal correction
+    if density > 0.95:
+        # Flip lowest 20% intensity cells to zero
+        flat = wm_arr.flatten()
+        n_flip = int(0.2 * flat.size)
+        idx = np.argpartition(flat, n_flip)[:n_flip]
+        bits_flat = bits01.flatten()
+        bits_flat[idx] = 0
+        bits01 = bits_flat.reshape(s, s)
+        density = float(bits01.mean())
+    elif density < 0.05:
+        # Flip highest 20% intensity cells to one
+        flat = wm_arr.flatten()
+        n_flip = int(0.2 * flat.size)
+        idx = np.argpartition(-flat, n_flip)[:n_flip]
+        bits_flat = bits01.flatten()
+        bits_flat[idx] = 1
+        bits01 = bits_flat.reshape(s, s)
+        density = float(bits01.mean())
+
+    # DEBUG: Print bits01 state RIGHT BEFORE ref_map creation
+    print(f"   🐛 DEBUG bits01 RIGHT BEFORE ref_map: mean={bits01.mean():.3f}, unique={np.unique(bits01)}")
+    
+    # CRITICAL FIX: Convert to float FIRST to prevent uint8 overflow/wrapping
+    bits01_float = bits01.astype(np.float64)
+    ref_map = bits01_float * 2.0 - 1.0  # Now: 0.0 → -1.0, 1.0 → +1.0
+    
+    # DEBUG: Print ref_map state RIGHT AFTER creation
+    print(f"   🐛 DEBUG ref_map RIGHT AFTER creation: mean_positive={(ref_map > 0).mean():.3f}, unique={np.unique(ref_map)}")
+    
+    print(f"   🛠 Binarization: s={s}, thr={thr_val:.2f}, density={density:.3f}")
+    
     return ref_map, s, (H, W), red
 
 def _coeff_strength_from_ll(dct_ll):
@@ -176,6 +225,7 @@ def embed_watermark_color(host_rgb, watermark_gray, alpha=None, redundancy=None)
     # defaults
     alpha = float(alpha) if (alpha is not None) else ALPHA
     Y, Cr, Cb = rgb_to_ycbcr(host_rgb)
+    # FIXED: Use direct _prepare_capacity_and_wm with built-in safety net
     ref_map, wm_size, _, eff_red = _prepare_capacity_and_wm(Y, watermark_gray, redundancy=redundancy)
     Y_wm = embed_watermark_dwt_dct(Y, ref_map, alpha=alpha, redundancy=eff_red)
     return ycbcr_to_rgb(Y_wm, Cr, Cb), ref_map, wm_size, eff_red
@@ -234,15 +284,55 @@ def apply_invisible_watermark(host_pil_image, watermark_mode, watermark_text=Non
         wm_gray = create_text_watermark(watermark_text or 'Copyright', 256)
     else:
         wm_gray = load_watermark_image_from_pil(watermark_pil_image, 256)
-    wm_host_rgb, _, _, eff_red = embed_watermark_color(host_rgb, wm_gray, alpha=alpha, redundancy=redundancy)
-    result = Image.fromarray(wm_host_rgb)
+    
+    wm_host_rgb, ref_map, wm_size, eff_red = embed_watermark_color(host_rgb, wm_gray, alpha=alpha, redundancy=redundancy)
+
+    # CRITICAL: Create PIL image with explicit mode to prevent conversions
+    result = Image.fromarray(wm_host_rgb, mode='RGB')
+
     try:
         psnr = measure_psnr(host_rgb, wm_host_rgb)
+
+        # Store in memory (for immediate use)
         result.info['imperceptibility_psnr'] = round(float(psnr), 2)
         result.info['alpha'] = round(float(alpha), 4)
         result.info['redundancy'] = int(eff_red)
-    except Exception:
-        pass
+        result.info['watermark_size'] = int(wm_size)
+        result.info['watermark_text'] = str(watermark_text or '')
+        
+        # NEW: Create PNG metadata that will be saved to file
+        from PIL import PngImagePlugin
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("watermark_size", str(wm_size))
+        pnginfo.add_text("redundancy", str(eff_red))
+        pnginfo.add_text("watermark_text", str(watermark_text or ''))
+        pnginfo.add_text("alpha", str(round(float(alpha), 4)))
+        pnginfo.add_text("imperceptibility_psnr", str(round(float(psnr), 2)))
+        
+        # Attach PNG metadata to result so it's saved when .save() is called
+        result.pnginfo = pnginfo
+        
+        # Self-test extraction
+        extracted = extract_watermark_color(wm_host_rgb, wm_size, redundancy=eff_red)
+        ncc = measure_ncc(ref_map, extracted)
+        ref_density = float(np.mean(ref_map > 0))
+        print(f"   🔍 Self-test extraction NCC: {ncc:.4f} (should be ~1.0)")
+        print(f"   🧩 Ref watermark density (final): {ref_density:.3f}")
+        
+        if ref_density >= 0.95 or ref_density <= 0.05:
+            print("   ⚠️ WARNING: Ref density still extreme; diversity fallback applied. Extraction will work but robustness may reduce.")
+        
+        result.info['self_test_ncc'] = round(float(ncc), 4)
+        
+        if ncc < 0.9:
+            print(f"   ⚠️ WARNING: Self-test NCC is low ({ncc:.4f}). Watermark may not survive compression!")
+            
+        # CRITICAL: Store both the raw array AND the reference map for verification
+        result._watermarked_array = wm_host_rgb.copy()
+        result._ref_map = ref_map.copy()
+        
+    except Exception as e:
+        print(f"   ⚠️ Self-test failed: {e}")
     return result
 
 def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_text=None,
@@ -251,12 +341,10 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
     Compute imperceptibility PSNR from original vs watermarked, then run attacks and return results.
     """
     alpha = float(alpha) if (alpha is not None) else ALPHA
-    # Treat provided image as ORIGINAL HOST
     if watermarked_pil_image.mode != 'RGB':
         watermarked_pil_image = watermarked_pil_image.convert('RGB')
     host_rgb = np.array(watermarked_pil_image, dtype=np.uint8)
 
-    # Build watermark content
     if watermark_mode == 'text':
         wm_gray_raw = create_text_watermark(watermark_text or 'Copyright', 256)
     else:
@@ -264,11 +352,10 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
             watermark_pil_image = watermark_pil_image.convert('L')
         wm_gray_raw = np.array(watermark_pil_image, dtype=np.float64)
 
-    # Capacity and ref map (based on HOST)
     Y_host = cv2.cvtColor(host_rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float64)
+    # FIXED: Use direct _prepare_capacity_and_wm (same as embed)
     ref_map, wm_size, _, eff_red = _prepare_capacity_and_wm(Y_host, wm_gray_raw, redundancy=redundancy)
 
-    # Embed with provided alpha/redundancy
     wm_host_rgb, _, _, _ = embed_watermark_color(host_rgb, wm_gray_raw, alpha=alpha, redundancy=eff_red)
     imperceptibility_psnr = measure_psnr(host_rgb, wm_host_rgb)
     print(f"   ✅ Imperceptibility PSNR: {imperceptibility_psnr:.2f} dB (computed from original vs watermarked)")
