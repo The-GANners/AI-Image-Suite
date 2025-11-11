@@ -15,7 +15,7 @@ import base64
 MODEL = 'haar'
 LEVEL = 1
 ALPHA = 0.38
-REDUNDANCY = 3
+REDUNDANCY = 3  # FIXED: Hardcoded to 3 for optimal performance with 256x256 images
 
 # =========================
 # Helpers

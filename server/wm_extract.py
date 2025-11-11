@@ -45,6 +45,48 @@ def bits_to_image(bits_2d, upscale=8):
     pil_up = ImageOps.autocontrast(pil_up)
     return pil_up
 
+# NEW: Build reference map for IMAGE watermarks (mirrors embedding)
+def _build_ref_map_from_image(image_path: str, size: int) -> np.ndarray:
+    """
+    Load original watermark image, convert to grayscale, resize to 256 then to (size,size),
+    threshold using 40th percentile of non-zero pixels, and map to +1/-1.
+    """
+    try:
+        img = Image.open(image_path).convert('L')
+    except Exception:
+        return None
+    base_size = 256
+    img_resized_large = img.resize((base_size, base_size), Image.Resampling.LANCZOS)
+    wm_resized = img_resized_large.resize((size, size), Image.Resampling.LANCZOS)
+    arr = np.array(wm_resized, dtype=np.uint8)
+    nz = arr[arr > 0]
+    if nz.size >= 3:
+        thr = np.percentile(nz, 40)
+        bits01 = (arr >= thr).astype(np.uint8)
+    else:
+        bits01 = (arr > 128).astype(np.uint8)
+    return bits01.astype(np.float64) * 2.0 - 1.0
+
+# NEW: Render a clean grayscale source image for TEXT watermarks (256x256)
+def _render_text_source_image(text: str, base_size: int = 256) -> Image.Image:
+    from PIL import ImageDraw, ImageFont
+    img = Image.new('L', (base_size, base_size), color=0)
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("arial.ttf", max(12, base_size // 8))
+    except:
+        font = ImageFont.load_default()
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+    except:
+        tw, th = draw.textsize(text, font=font)
+    x = (base_size - tw) // 2
+    y = (base_size - th) // 2
+    draw.text((x, y), text, fill=255, font=font)
+    return img
+
 # NEW: Improved text reconstruction using multiple upscaling strategies
 def reconstruct_text_from_bits(bits_2d, meta_text=None):
     """
@@ -61,7 +103,7 @@ def reconstruct_text_from_bits(bits_2d, meta_text=None):
             
             # If metadata text matches well (>50% correlation), trust it
             if score > 0.5:
-                print(f"✅ [METADATA MATCH] Text '{meta_text}' matches extracted pattern (score={score:.4f})")
+                print(f"[METADATA MATCH] Text '{meta_text}' matches extracted pattern (score={score:.4f})")
                 return meta_text, 'metadata_verified'
     
     # Strategy 2: Multi-scale OCR with different upscaling factors
@@ -188,7 +230,7 @@ def _auto_extract_best(Y_channel, redundancy_hint=None):
     best = candidates[0]
     _, best_H, _, best_dens, best_s, best_r, best_bits = best
     
-    print(f"[DEBUG] ✅ Auto-selected: size={best_s}, redundancy={best_r}, entropy={best_H:.3f}, density={best_dens:.3f}")
+    print(f"[DEBUG] Auto-selected: size={best_s}, redundancy={best_r}, entropy={best_H:.3f}, density={best_dens:.3f}")
     return best_bits, best_s, best_r, best_dens
 
 # NEW: Add template generation for known texts
@@ -242,7 +284,7 @@ def match_text_patterns(extracted_bits, candidates=None):
         candidates = [
             'Nandan', 'NANDAN', 'nandan',
             'Sample Watermark', 'SAMPLE', 'Sample',
-            'Copyright', 'COPYRIGHT', '© Copyright',
+            'Copyright', 'COPYRIGHT', '(c) Copyright',
             'Watermark', 'WATERMARK',
             'Protected', 'PROTECTED',
             'N', 'Na', 'Nan', 'Nand'  # Partial matches for 'Nandan'
@@ -252,7 +294,7 @@ def match_text_patterns(extracted_bits, candidates=None):
     best_match = None
     best_score = -1
     
-    print(f"\n[DEBUG] 🔍 Trying template matching against {len(candidates)} candidates...")
+    print(f"\n[DEBUG] Trying template matching against {len(candidates)} candidates...")
     
     for text in candidates:
         try:
@@ -267,21 +309,21 @@ def match_text_patterns(extracted_bits, candidates=None):
             # Normalize to 0-1 range (correlation is in [-1, 1])
             score = (correlation + 1.0) / 2.0
             
-            print(f"  • '{text}': correlation={correlation:.4f}, score={score:.4f}")
+            print(f"  - '{text}': correlation={correlation:.4f}, score={score:.4f}")
             
             if score > best_score:
                 best_score = score
                 best_match = text
         except Exception as e:
-            print(f"  ⚠️ Failed matching '{text}': {e}")
+            print(f"  [WARN] Failed matching '{text}': {e}")
             continue
     
     # Consider it a match if correlation > 0.5 (means >75% bit agreement)
     if best_score > 0.5:
-        print(f"\n✅ [MATCH] Best match: '{best_match}' (score={best_score:.4f})")
+        print(f"\n[MATCH] Best match: '{best_match}' (score={best_score:.4f})")
         return best_match, best_score
     else:
-        print(f"\n❌ [NO MATCH] Best score was {best_score:.4f} for '{best_match}' (threshold=0.5)")
+        print(f"\n[NO MATCH] Best score was {best_score:.4f} for '{best_match}' (threshold=0.5)")
         return None, best_score
 
 def smart_text_recovery(bits_2d, wm_img):
@@ -370,7 +412,7 @@ def _measure_ncc(a: np.ndarray, b: np.ndarray) -> float:
     bb[bb == 0] = 1
     return float(np.mean(aa * bb))
 
-def extract_watermark(image_path: str, size_override=None, redundancy_override=None, known_text=None):
+def extract_watermark(image_path: str, size_override=None, redundancy_override=None, known_text=None, watermark_image=None):
     if not os.path.isfile(image_path):
         raise FileNotFoundError(image_path)
     
@@ -448,65 +490,22 @@ def extract_watermark(image_path: str, size_override=None, redundancy_override=N
         except Exception as e:
             print(f"[METADATA RAW CHUNKS] failed: {e}")
 
+    # REPLACED FALLBACK BLOCK: unify behavior (use redundancy_override or DEFAULT_REDUNDANCY; no early return)
     if not meta_size or not meta_red:
-        # NEW: If user provides redundancy but not size, calculate size from image dimensions
-        if redundancy_override:
-            print(f"[FALLBACK] Using user-provided redundancy={redundancy_override}, calculating size from image dimensions...")
-            rgb = np.array(pil.convert('RGB'), dtype=np.uint8)
-            ycbcr = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
-            Y = ycbcr[:, :, 0].astype(np.float64)
-            
-            # Calculate size using the formula: size = sqrt(capacity / redundancy)
-            auto_size, effective_red = infer_watermark_size(Y, redundancy_override)
-            meta_size = auto_size
-            meta_red = effective_red  # Use adjusted redundancy if size was capped
-            meta_text = known_text or ''
-            
-            print(f"[FALLBACK] Calculated size={meta_size} from redundancy={meta_red}")
-        elif size_override and redundancy_override:
-            # User provided both size and redundancy explicitly
-            print(f"[FALLBACK] Using user overrides: size={size_override}, redundancy={redundancy_override}")
-            meta_size = int(size_override)
-            meta_red = int(redundancy_override)
-            meta_text = known_text or ''
+        rgb = np.array(pil.convert('RGB'), dtype=np.uint8)
+        ycbcr = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+        Y = ycbcr[:, :, 0].astype(np.float64)
+
+        if redundancy_override is not None:
+            forced_red = int(redundancy_override)
+            print(f"[FALLBACK] Using user-provided redundancy={forced_red}, calculating size...")
         else:
-            # No parameters provided - auto-detect both size and redundancy
-            print("[FALLBACK] Metadata missing; attempting auto-detection of size/redundancy...")
-            rgb = np.array(pil.convert('RGB'), dtype=np.uint8)
-            ycbcr = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
-            Y = ycbcr[:, :, 0].astype(np.float64)
-            bits_auto, auto_size, auto_red, auto_density = _auto_extract_best(Y, redundancy_hint=DEFAULT_REDUNDANCY)
-            meta_size = auto_size
-            meta_red = auto_red
-            bits = bits_auto  # Directly use auto bits
-            density = float(np.mean(bits > 0))
-            print(f"[FALLBACK] Auto-detected size={meta_size}, redundancy={meta_red}, density={density:.3f}")
-            recovered_text = None
-            recovery_method = 'auto_detect'
-            if known_text:
-                ref_map = _build_ref_map_from_text(known_text, meta_size)
-                if ref_map is not None and ref_map.shape == bits.shape:
-                    ncc = _measure_ncc(ref_map, bits)
-                    print(f"[VERIFY] NCC vs provided text '{known_text}': {ncc:.4f}")
-                    if ncc >= 0.99:
-                        recovered_text = known_text
-                        recovery_method = 'auto_detect_verified'
-                    elif ncc >= 0.60:
-                        recovery_method = 'auto_detect_moderate'
-                        print(f"⚠️ [AMBIGUOUS] NCC ({ncc:.4f}) between 0.60-0.99. Text may be incorrect.")
-                    else:
-                        recovery_method = 'auto_detect_low_ncc'
-            if not recovered_text:
-                recovered_text = f"PATTERN(density={density:.3f})"
-            return {
-                'image_path': image_path,
-                'watermark_size': meta_size,
-                'redundancy_used': meta_red,
-                'extracted_text': recovered_text,
-                'recovery_method': recovery_method,
-                'foreground_density': density,
-                'bits': bits
-            }
+            forced_red = int(DEFAULT_REDUNDANCY)
+            print(f"[FALLBACK] No metadata found; using default redundancy={forced_red}")
+
+        meta_size, meta_red = infer_watermark_size(Y, forced_red)
+        meta_text = known_text or meta_text or ''
+        print(f"[FALLBACK] Inferred watermark_size={meta_size}, effective_redundancy={meta_red}")
 
     # Direct inverse extraction
     bits = _extract_bits_from_image(pil, meta_size, meta_red)
@@ -515,29 +514,55 @@ def extract_watermark(image_path: str, size_override=None, redundancy_override=N
 
     recovered_text = None
     recovery_method = 'none'
+    verification_ncc = None
+    watermark_type = 'unknown'
 
-    # Use metadata text if present; else allow known_text override
+    # TEXT verification branch (unchanged logic) - prefer text if provided
     use_text_for_verify = meta_text or known_text
-    if use_text_for_verify:
+    if use_text_for_verify and not watermark_image:
+        watermark_type = 'text'
         ref_map = _build_ref_map_from_text(use_text_for_verify, meta_size)
         if ref_map is not None and ref_map.shape == bits.shape:
             ncc = _measure_ncc(ref_map, bits)
-            print(f"[VERIFY] NCC vs reference text map: {ncc:.4f}")
-            
-            # STRICTENED THRESHOLD: 0.95 for exact text matching (was 0.60)
+            verification_ncc = ncc
+            print(f"[VERIFY TEXT] NCC vs reference text map: {ncc:.4f}")
             if ncc >= 0.99:
                 recovered_text = use_text_for_verify
                 recovery_method = 'metadata_direct' if meta_text else 'override_direct'
             elif ncc >= 0.60:
-                # Moderate match (60-95%) - likely wrong text but similar pattern
                 recovery_method = 'low_ncc_moderate'
-                print(f"⚠️ [AMBIGUOUS] NCC ({ncc:.4f}) between 0.60-0.95. Text may be incorrect.")
+                print(f"[AMBIGUOUS] NCC ({ncc:.4f}) between 0.60-0.99. Text may be incorrect.")
             else:
                 recovery_method = 'low_ncc'
         else:
             recovery_method = 'ref_map_mismatch'
+
+    # IMAGE verification branch (new)
+    elif watermark_image:
+        watermark_type = 'image'
+        print(f"[IMAGE VERIFY] Using watermark image: {watermark_image}")
+        ref_map_img = _build_ref_map_from_image(watermark_image, meta_size)
+        if ref_map_img is None or ref_map_img.shape != bits.shape:
+            print("[IMAGE VERIFY] Failed to build reference map (shape mismatch or load error).")
+            recovery_method = 'image_ref_failed'
+        else:
+            ncc_img = _measure_ncc(ref_map_img, bits)
+            verification_ncc = ncc_img
+            print(f"[VERIFY IMAGE] NCC vs reference image map: {ncc_img:.4f}")
+            if ncc_img >= 0.99:
+                recovery_method = 'image_verified'
+                recovered_text = 'IMAGE_MATCH'
+            elif ncc_img >= 0.60:
+                recovery_method = 'image_moderate'
+                recovered_text = f'IMAGE_PARTIAL(NCC={ncc_img:.3f})'
+                print(f"[AMBIGUOUS] Image NCC ({ncc_img:.4f}) moderate (0.60-0.99).")
+            else:
+                recovery_method = 'image_low_ncc'
+                recovered_text = f'IMAGE_WEAK(NCC={ncc_img:.3f})'
+
     else:
         recovery_method = 'no_text_metadata'
+        recovered_text = f"PATTERN(density={density:.3f})"
 
     if not recovered_text:
         recovered_text = f"PATTERN(density={density:.3f})"
@@ -549,42 +574,48 @@ def extract_watermark(image_path: str, size_override=None, redundancy_override=N
         'extracted_text': recovered_text,
         'recovery_method': recovery_method,
         'foreground_density': density,
-        'bits': bits
+        'bits': bits,
+        'watermark_type': watermark_type,
+        'verification_ncc': verification_ncc
     }
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Direct DWT-DCT invisible watermark extraction with intelligent auto-detection.",
+        description="Direct DWT-DCT invisible watermark extraction with text or image verification.",
         epilog="""
-USAGE:
-  Basic extraction (auto-detects all parameters):
+EXAMPLES:
+  Auto-detect only:
     python wm_extract.py watermarked.png
-  
-  With output file:
-    python wm_extract.py watermarked.png --out recovered.png
-  
-  Manual override (if auto-detection fails):
-    python wm_extract.py watermarked.png --redundancy 3 --text "YourText"
-  
-  Note: Watermark size is automatically calculated from image dimensions
+
+  Verify text watermark:
+    python wm_extract.py watermarked.png --text "Nandan"
+
+  Verify image watermark:
+    python wm_extract.py watermarked.png --wm-image original_logo.png
+
+  Provide redundancy hint (improves size inference if metadata stripped):
+    python wm_extract.py watermarked.png --wm-image logo.png --redundancy 3
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("image", help="Path to watermarked PNG")
     ap.add_argument("--out", "-o", help="Optional path to save reconstructed bit pattern PNG")
-    # REMOVED: --size argument (now auto-calculated from image dimensions)
-    ap.add_argument("--redundancy", "-r", type=int, 
-                   help="Optional: Override redundancy (default: auto-detect from metadata or use 3)")
-    ap.add_argument("--text", "-t", 
-                   help="Optional: Known watermark text for verification")
+    ap.add_argument("--redundancy", "-r", type=int, help="Optional redundancy hint (default 3 if missing metadata)")
+    ap.add_argument("--text", "-t", help="Known text watermark for verification")
+    ap.add_argument("--wm-image", "-W", help="Path to original watermark image for verification (image mode)")
     args = ap.parse_args()
+
+    if args.text and args.wm_image:
+        print("[ERROR] Provide either --text OR --wm-image, not both.")
+        sys.exit(1)
 
     try:
         result = extract_watermark(
             args.image,
-            size_override=None,  # Always None - size is auto-calculated
-            redundancy_override=args.redundancy,
-            known_text=args.text
+            size_override=None,
+            redundancy_override=args.redundancy,  # Works even if None (defaults internally to 3)
+            known_text=args.text,
+            watermark_image=args.wm_image
         )
     except Exception as e:
         print(f"[ERROR] Extraction failed: {e}")
@@ -596,25 +627,17 @@ USAGE:
 
     print("\n=== Watermark Extraction Report ===")
     print(f"Image: {result['image_path']}")
+    print(f"Type: {result['watermark_type']}")
     print(f"Watermark size: {result['watermark_size']} x {result['watermark_size']}")
     print(f"Redundancy used: {result['redundancy_used']}")
-    print(f"Recovered text: {result['extracted_text']}")
+    print(f"Recovered text / status: {result['extracted_text']}")
     print(f"Recovery method: {result['recovery_method']}")
+    if result['verification_ncc'] is not None:
+        print(f"Verification NCC: {result['verification_ncc']:.4f}")
     print(f"Foreground density: {result['foreground_density']:.4f}")
-    
-    # Show helpful hints based on recovery method
-    if result['recovery_method'] == 'auto_detect':
-        print("\n💡 TIP: Auto-detection was used (metadata missing).")
-        print("   If the text looks wrong, try providing it manually:")
-        print(f'   python wm_extract.py "{args.image}" --text "CorrectText"')
-    elif result['recovery_method'] == 'low_ncc_moderate':
-        print("\n⚠️ WARNING: Moderate NCC score detected. Extracted text may be incorrect.")
-        print("   Try providing the exact text you embedded:")
-        print(f'   python wm_extract.py "{args.image}" --text "YourExactText"')
 
     if args.out:
         try:
-            # Save bit pattern (visualization)
             bits = result['bits']
             vis = (bits > 0).astype(np.uint8) * 255
             Image.fromarray(vis, mode='L').save(args.out, format='PNG')
