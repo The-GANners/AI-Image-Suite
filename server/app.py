@@ -124,6 +124,13 @@ gallery_routes_module = importlib.util.module_from_spec(spec_gallery)
 spec_gallery.loader.exec_module(gallery_routes_module)
 gallery_bp = gallery_routes_module.gallery_bp
 
+# Load extract_api blueprint
+extract_api_path = server_dir / 'extract_api.py'
+spec_extract = importlib.util.spec_from_file_location("server_extract_api", extract_api_path)
+extract_api_module = importlib.util.module_from_spec(spec_extract)
+spec_extract.loader.exec_module(extract_api_module)
+extract_bp = extract_api_module.extract_bp
+
 app = Flask(__name__)
 CORS(app, 
      origins=["http://localhost:3000"],
@@ -133,6 +140,7 @@ CORS(app,
 # Register blueprints
 app.register_blueprint(auth_bp)
 app.register_blueprint(gallery_bp)
+app.register_blueprint(extract_bp)
 
 # Initialize database on first import
 try:
