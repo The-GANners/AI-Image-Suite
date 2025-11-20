@@ -5,6 +5,8 @@ const ExtractWatermarkPopup = ({ isOpen, onClose }) => {
   const [image, setImage] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [text, setText] = useState('');
+  const [watermarkImage, setWatermarkImage] = useState(null);  // NEW
+  const [verificationMode, setVerificationMode] = useState('text');  // NEW: 'text' or 'image'
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -39,18 +41,44 @@ const ExtractWatermarkPopup = ({ isOpen, onClose }) => {
     setText(e.target.value);
   };
 
+  // NEW: Handle watermark image upload
+  const handleWatermarkImageChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    setWatermarkImage(file || null);
+    setResult(null);
+    setError(null);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!image) {
       setError('Please upload an image.');
       return;
     }
+    
+    // Validate verification input
+    if (verificationMode === 'text' && !text.trim()) {
+      // Allow extraction without verification
+      console.log('[EXTRACT] No text provided - will extract only');
+    } else if (verificationMode === 'image' && !watermarkImage) {
+      setError('Please upload the watermark image for verification.');
+      return;
+    }
+    
     setLoading(true);
     setError(null);
     setResult(null);
+    
     const formData = new FormData();
     formData.append('image', image);
-    formData.append('text', text);
+    
+    // Add verification data based on mode
+    if (verificationMode === 'text') {
+      formData.append('text', text);
+    } else if (verificationMode === 'image' && watermarkImage) {
+      formData.append('watermark_image', watermarkImage);
+    }
+    
     try {
       const response = await fetch('/api/extract-watermark', {
         method: 'POST',
@@ -201,7 +229,7 @@ const ExtractWatermarkPopup = ({ isOpen, onClose }) => {
     <div style={overlayStyle}>
       <div style={popupStyle}>
         <button style={closeBtnStyle} onClick={onClose} title="Close">&times;</button>
-        <h2 style={{fontSize: 22, fontWeight: 700, marginBottom: 18, color: '#a5b4fc'}}>Extract Watermark</h2>
+        <h2 style={{fontSize: 22, fontWeight: 700, marginBottom: 18, color: '#a5b4fc'}}>Verify Watermark</h2>
         <form onSubmit={handleSubmit} autoComplete="off" style={{flexShrink: 0}}>
           <div style={{marginBottom: 18}}>
             <label style={labelStyle}>Upload Image:</label>
@@ -230,17 +258,216 @@ const ExtractWatermarkPopup = ({ isOpen, onClose }) => {
               )}
             </div>
           </div>
+          
+          {/* NEW: Verification mode selector */}
           <div style={{marginBottom: 18}}>
-            <label style={labelStyle}>Watermark Text (optional):</label>
-            <input type="text" value={text} onChange={handleTextChange} placeholder="Enter watermark text" style={inputStyle} />
+            <label style={labelStyle}>Verification Method:</label>
+            <div style={{display: 'flex', gap: 16, marginBottom: 12}}>
+              <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
+                <input
+                  type="radio"
+                  value="text"
+                  checked={verificationMode === 'text'}
+                  onChange={(e) => setVerificationMode(e.target.value)}
+                  style={{marginRight: 6}}
+                />
+                <span>Text Watermark</span>
+              </label>
+              <label style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}>
+                <input
+                  type="radio"
+                  value="image"
+                  checked={verificationMode === 'image'}
+                  onChange={(e) => setVerificationMode(e.target.value)}
+                  style={{marginRight: 6}}
+                />
+                <span>Image Watermark</span>
+              </label>
+            </div>
           </div>
-          <button type="submit" style={submitBtnStyle} disabled={loading}>{loading ? 'Extracting...' : 'Extract Watermark'}</button>
+          
+          {/* Conditional input based on verification mode */}
+          {verificationMode === 'text' ? (
+            <div style={{marginBottom: 18}}>
+              <label style={labelStyle}>Watermark Text :</label>
+              <input 
+                type="text" 
+                value={text} 
+                onChange={handleTextChange} 
+                placeholder="Enter watermark text" 
+                style={inputStyle} 
+              />
+              <p style={{fontSize: 12, color: '#a1a1aa', marginTop: 4}}>
+               
+              </p>
+            </div>
+          ) : (
+            <div style={{marginBottom: 18}}>
+              <label style={labelStyle}>Watermark Image:</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleWatermarkImageChange}
+                style={{...inputStyle, display: 'block', padding: '0.5rem'}}
+              />
+              {watermarkImage && (
+                <p style={{fontSize: 12, color: '#a5b4fc', marginTop: 4}}>
+                  Selected: {watermarkImage.name}
+                </p>
+              )}
+            </div>
+          )}
+          
+          <button type="submit" style={submitBtnStyle} disabled={loading}>
+            {loading ? 'Verifying...' : 'Extract & Verify Watermark'}
+          </button>
         </form>
+        
         {error && <div style={errorMsgStyle}>{error}</div>}
         {result && (
           <div style={resultSectionStyle}>
-            <h3 style={{fontWeight: 600, fontSize: 17, marginBottom: 8, color: '#a5b4fc'}}>Extraction Result</h3>
-            <pre style={{whiteSpace: 'pre-wrap', color: '#e0e7ef', margin: 0}}>{result.output || JSON.stringify(result, null, 2)}</pre>
+            {/* Check if new format (extraction/verification) or old format */}
+            {result.extraction ? (
+              <div className="space-y-4">
+                {/* EXTRACTION RESULTS */}
+                <div>
+                  <h3 style={{fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#a5b4fc'}}>
+                    📊 Extraction Results
+                  </h3>
+                  
+                  <div style={{fontSize: 14, color: '#d4d4d8'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 8}}>
+                      <span>Watermark Size:</span>
+                      <strong>{result.extraction.watermark_size}×{result.extraction.watermark_size}</strong>
+                    </div>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 8}}>
+                      <span>Redundancy:</span>
+                      <strong>{result.extraction.redundancy}</strong>
+                    </div>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 8}}>
+                      <span>Pattern Density:</span>
+                      <strong>{(result.extraction.density * 100).toFixed(1)}%</strong>
+                    </div>
+                    
+                    {result.extraction.metadata_text && (
+                      <div style={{marginTop: 12, padding: 8, background: '#2a2a32', borderRadius: 6}}>
+                        <div style={{fontSize: 12, color: '#a1a1aa', marginBottom: 4}}>From PNG metadata:</div>
+                        <div style={{fontWeight: 600, color: '#a5b4fc'}}>"{result.extraction.metadata_text}"</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Extracted Pattern Visualization */}
+                  {result.extraction.pattern_visualization && (
+                    <div style={{marginTop: 16}}>
+                      <div style={{fontSize: 12, color: '#a1a1aa', marginBottom: 8}}>Extracted Binary Pattern:</div>
+                      <div style={{display: 'flex', gap: 12, alignItems: 'flex-start'}}>
+                        <img
+                          src={result.extraction.pattern_visualization}
+                          alt="Extracted pattern"
+                          style={{
+                            width: 120,
+                            height: 120,
+                            border: '2px solid #52525b',
+                            borderRadius: 6,
+                            imageRendering: 'pixelated'
+                          }}
+                        />
+                        <div style={{flex: 1, fontSize: 12, color: '#a1a1aa'}}>
+                          <div>• White = +1 bit</div>
+                          <div>• Black = -1 bit</div>
+                          <div>• {result.extraction.watermark_size}×{result.extraction.watermark_size} grid</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* VERIFICATION RESULTS */}
+                {result.verification.attempted && (
+                  <div style={{
+                    marginTop: 16,
+                    padding: 12,
+                    borderRadius: 8,
+                    background: result.verification.result === 'verified' 
+                      ? '#065f46' 
+                      : result.verification.result === 'mismatch'
+                      ? '#7f1d1d'
+                      : result.verification.result === 'mode_mismatch'
+                      ? '#78350f'
+                      : '#78350f'
+                  }}>
+                    <h3 style={{fontSize: 16, fontWeight: 600, marginBottom: 12}}>
+                      {result.verification.result === 'verified' ? '✅' : 
+                       result.verification.result === 'mismatch' ? '❌' : '⚠️'}
+                      {' '}Verification Results
+                    </h3>
+                    
+                    <div style={{fontSize: 14}}>
+                      {/* Show claimed text OR image indicator */}
+                      <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 8}}>
+                        <span>{result.verification.claimed_image ? 'Claimed Watermark:' : 'Claimed Text:'}</span>
+                        <strong>
+                          {result.verification.claimed_image 
+                            ? '🖼️ Image Watermark' 
+                            : `"${result.verification.claimed_text}"`}
+                        </strong>
+                      </div>
+                      
+                      {/* Show NCC score unless mode mismatch */}
+                      {result.verification.result !== 'mode_mismatch' && (
+                        <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 8}}>
+                          <span>NCC Score:</span>
+                          <strong style={{
+                            color: result.verification.ncc_score > 0.6 ? '#4ade80' :
+                                   result.verification.ncc_score > 0.3 ? '#fbbf24' : '#f87171'
+                          }}>
+                            {result.verification.ncc_score.toFixed(4)}
+                          </strong>
+                        </div>
+                      )}
+                      
+                      {/* Success message */}
+                      {result.verification.verified_text && (
+                        <div style={{marginTop: 12, padding: 10, background: '#064e3b', borderRadius: 6, fontWeight: 600}}>
+                          ✓ Verified: {result.verification.claimed_image ? '🖼️ Image Watermark Matches!' : `"${result.verification.verified_text}"`}
+                        </div>
+                      )}
+                      
+                      {/* Mismatch message */}
+                      {result.verification.result === 'mismatch' && (
+                        <p style={{marginTop: 12, fontSize: 13, color: '#fca5a5'}}>
+                          {result.verification.claimed_image 
+                            ? 'The uploaded watermark image does not match the embedded watermark.' 
+                            : 'The claimed text does not match the embedded watermark.'}
+                        </p>
+                      )}
+                      
+                      {/* Mode mismatch warning */}
+                      {result.verification.result === 'mode_mismatch' && result.verification.message && (
+                        <p style={{marginTop: 12, fontSize: 13, color: '#fbbf24'}}>
+                          ⚠️ {result.verification.message}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {!result.verification.attempted && (
+                  <div style={{marginTop: 16, padding: 12, background: '#2a2a32', borderRadius: 8, fontSize: 14, color: '#a1a1aa'}}>
+                    💡 {verificationMode === 'text' 
+                      ? 'Enter watermark text above and verify again.' 
+                      : 'Upload the watermark image above and verify again.'}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* OLD FORMAT FALLBACK */
+              <div>
+                <h3 style={{fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#a5b4fc'}}>Results</h3>
+                <pre style={{fontSize: 13, whiteSpace: 'pre-wrap', color: '#d4d4d8'}}>{JSON.stringify(result, null, 2)}</pre>
+              </div>
+            )}
           </div>
         )}
       </div>

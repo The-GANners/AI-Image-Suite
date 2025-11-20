@@ -203,7 +203,7 @@ const Watermark = () => {
         }
       }
       
-      console.log(`🚀 [WATERMARK] Sending ${watermarkType} watermark payload to backend:`, {
+      console.log('[WATERMARK] Sending payload', {
         type: watermarkType,
         mode: watermarkMode,
         endpoint
@@ -326,7 +326,7 @@ const Watermark = () => {
       }
 
       const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5001';
-      console.log('🧪 [ROBUSTNESS TEST] Starting robustness test...', { API_BASE, alpha: invisibleAlpha });
+      console.log('[ROBUSTNESS TEST] Starting', { API_BASE, alpha: invisibleAlpha });
 
       const res = await fetch(`${API_BASE}/api/watermark/test-robustness`, {
         method: 'POST',
@@ -339,7 +339,7 @@ const Watermark = () => {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      console.log('✅ [ROBUSTNESS TEST] Test completed:', data);
+      console.log('[ROBUSTNESS TEST] Completed', data);
       setRobustnessResults(data);
       setShowRobustnessModal(true);
       toast.success('Robustness test completed!');
@@ -477,7 +477,7 @@ const Watermark = () => {
           ...(token && { 'Authorization': `Bearer ${token}` })
         };
         
-        console.log('🔍 [PREVIEW] Calling watermark preview API...', { API_BASE, endpoint, imageCount: payload.images.length });
+        console.log('[PREVIEW] Calling API', { API_BASE, endpoint, imageCount: payload.images.length });
         
         const res = await fetch(`${API_BASE}${endpoint}`, {
           method: 'POST',
@@ -486,13 +486,13 @@ const Watermark = () => {
           signal: controller.signal
         });
         
-        console.log('🔍 [PREVIEW] API response status:', res.status);
+        console.log('[PREVIEW] API response status', res.status);
         
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (!res.ok || data.error) {
           // On preview error, just clear previews silently
-          console.warn('⚠️ [PREVIEW] API error:', data.error || `HTTP ${res.status}`);
+          console.warn('[PREVIEW] API error', data.error || `HTTP ${res.status}`);
           setPreviewGrid([]);
           setPreviewLoading(false);
           return;
@@ -503,11 +503,11 @@ const Watermark = () => {
           name: subset[i]?.name || `image_${i + 1}.png`,
           url: out.dataUrl
         }));
-        console.log('✅ [PREVIEW] Preview generated successfully:', thumbs.length, 'images');
+        console.log('[PREVIEW] Generated previews count', thumbs.length);
         setPreviewGrid(thumbs);
       } catch (e) {
         if (!cancelled) {
-          console.error('❌ [PREVIEW] Preview failed:', e);
+          console.error('[PREVIEW] Failed', e);
           setPreviewGrid([]);
         }
       } finally {
@@ -993,7 +993,7 @@ const Watermark = () => {
                     onClick={() => setShowExtractPopup(true)}
                     className="btn-primary w-full mt-2 flex items-center justify-center space-x-2"
                   >
-                    <span>Extract Watermark</span>
+                    <span>Verify Watermark</span>
                   </button>
                 </div>
               )}

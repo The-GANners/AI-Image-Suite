@@ -10,6 +10,7 @@ from scipy.ndimage import gaussian_filter
 import cv2
 import io
 import base64
+import hashlib  # NEW
 
 # Configuration (LOCKED)
 MODEL = 'haar'
@@ -30,6 +31,7 @@ def ycbcr_to_rgb(Y, Cr, Cb):
     return cv2.cvtColor(ycbcr, cv2.COLOR_YCrCb2RGB)
 
 def create_text_watermark(text, size, font_size=None):
+    """Legacy text watermark using font rendering (for visible watermarks)"""
     if font_size is None:
         font_size = max(12, size // 8)
     img = Image.new('L', (size, size), color=0)
@@ -48,6 +50,50 @@ def create_text_watermark(text, size, font_size=None):
     y = (size - text_h) // 2
     draw.text((x, y), text, fill=255, font=font)
     return np.array(img, dtype=np.float64)
+
+# NEW: SHA-256 based pattern generator for invisible watermarks
+def create_text_watermark_hash(text, size):
+    """
+    Create balanced binary watermark pattern from text using SHA-256 hashing.
+    This eliminates false positives by ensuring ~50% bit distribution.
+    
+    Args:
+        text: Input text string
+        size: Output pattern size (will be size x size grid)
+    
+    Returns:
+        numpy array (size x size) with balanced grayscale pattern (0-255)
+    """
+    # Hash text to get cryptographically balanced bit pattern
+    text_bytes = text.encode('utf-8')
+    hash_digest = hashlib.sha256(text_bytes).digest()
+    
+    # Convert hash bytes to binary bits (each byte → 8 bits)
+    bits = np.unpackbits(np.frombuffer(hash_digest, dtype=np.uint8))
+    
+    # Calculate needed bits for size×size grid
+    needed = size * size
+    
+    if len(bits) < needed:
+        # Repeat hash via chaining if needed: H(text), H(H(text)), H(H(H(text))), ...
+        extended_bits = bits
+        current_hash = hash_digest
+        while len(extended_bits) < needed:
+            current_hash = hashlib.sha256(current_hash).digest()
+            new_bits = np.unpackbits(np.frombuffer(current_hash, dtype=np.uint8))
+            extended_bits = np.concatenate([extended_bits, new_bits])
+        bits = extended_bits[:needed]
+    else:
+        bits = bits[:needed]
+    
+    # Reshape to 2D grid and convert to grayscale (0 → black, 1 → white)
+    pattern = bits.reshape(size, size).astype(np.float64) * 255.0
+    
+    # Log the balanced distribution for verification
+    density = float(bits.mean())
+    print(f"   🔐 SHA-256 pattern for '{text}': density={density:.3f} (target=0.50)")
+    
+    return pattern
 
 def load_watermark_image_from_pil(pil_image, size):
     img = pil_image.convert('L')
@@ -230,10 +276,25 @@ def embed_watermark_color(host_rgb, watermark_gray, alpha=None, redundancy=None)
     Y_wm = embed_watermark_dwt_dct(Y, ref_map, alpha=alpha, redundancy=eff_red)
     return ycbcr_to_rgb(Y_wm, Cr, Cb), ref_map, wm_size, eff_red
 
-def extract_watermark_color(wm_rgb, wm_size, redundancy=None):
+def extract_watermark_color(wm_rgb, wm_size, redundancy=None, key=None, salt_hex=None):
+    """
+    Extract watermark bits from RGB image. If keyed, requires key+salt to unscramble.
+    """
+    redundancy = int(redundancy or REDUNDANCY)
     Y, _, _ = rgb_to_ycbcr(wm_rgb)
-    eff_red = int(redundancy) if (redundancy is not None) else REDUNDANCY
-    return extract_watermark_dwt_dct(Y, wm_size, redundancy=eff_red)
+    
+    # Extract raw (possibly scrambled) bits
+    raw_bits = extract_watermark_dwt_dct(Y, wm_size, redundancy)
+    
+    # NEW: Unscramble if keyed
+    if key and salt_hex:
+        try:
+            salt = bytes.fromhex(salt_hex)
+            raw_bits = _unscramble_bits(raw_bits, key, salt)
+        except Exception as e:
+            raise ValueError(f"Key unscrambling failed: {e}")
+    
+    return raw_bits
 
 # =========================
 # Attacks and metrics
@@ -274,16 +335,47 @@ def measure_ncc(original_wm, recovered_wm):
 # Public API
 # =========================
 def apply_invisible_watermark(host_pil_image, watermark_mode, watermark_text=None,
-                              watermark_pil_image=None, alpha=None, redundancy=None):
+                              watermark_pil_image=None, alpha=None, redundancy=None,
+                              key=None):  # NEW: optional secret key for confidentiality
     """
     Returns a PIL Image only (no tuple) to remain compatible with callers that call .save().
     """
     alpha = float(alpha) if (alpha is not None) else ALPHA
     host_rgb = np.array(host_pil_image.convert('RGB'), dtype=np.uint8)
+    
+    # NEW: Use hash-based pattern for text mode to eliminate false positives
     if watermark_mode == 'text':
-        wm_gray = create_text_watermark(watermark_text or 'Copyright', 256)
+        wm_gray = create_text_watermark_hash(watermark_text or 'Copyright', 256)
+    # IMAGE watermark mode
+    elif watermark_mode == 'image':
+        if watermark_pil_image is None:
+            raise ValueError("watermark_pil_image is required for image mode")
+        
+        # NEW: Hash the image pixels with SHA-256 (same approach as text)
+        wm_gray = watermark_pil_image.convert('L')  # Grayscale
+        wm_gray = wm_gray.resize((256, 256), Image.BICUBIC)  # Standardize size
+        wm_array = np.array(wm_gray).flatten()  # Flatten to 1D
+        
+        # Compute SHA-256 hash of image pixel data
+        import hashlib
+        wm_bytes = wm_array.tobytes()
+        hash_obj = hashlib.sha256(wm_bytes)
+        hash_hex = hash_obj.hexdigest()
+        
+        # Convert hash to 256-bit binary pattern (same as text mode)
+        hash_bytes = bytes.fromhex(hash_hex)
+        bits = np.unpackbits(np.frombuffer(hash_bytes, dtype=np.uint8))
+        
+        # Reshape to 256-bit watermark
+        wm_gray = bits.reshape(256, 1).astype(np.float32)
+        
+        # Store hash hex as "text" for metadata/verification
+        watermark_identifier = f"IMG_SHA256:{hash_hex[:16]}"  # First 16 chars as ID
+        
+        print(f"   ℹ Image watermark hashed to SHA-256: {hash_hex[:32]}...")
+        print(f"   ℹ Watermark identifier: {watermark_identifier}")
     else:
-        wm_gray = load_watermark_image_from_pil(watermark_pil_image, 256)
+        raise ValueError("Invalid watermark_mode. Use 'text' or 'image'.")
     
     wm_host_rgb, ref_map, wm_size, eff_red = embed_watermark_color(host_rgb, wm_gray, alpha=alpha, redundancy=redundancy)
 
@@ -336,7 +428,8 @@ def apply_invisible_watermark(host_pil_image, watermark_mode, watermark_text=Non
     return result
 
 def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_text=None,
-                              watermark_pil_image=None, alpha=None, redundancy=None):
+                              watermark_pil_image=None, alpha=None, redundancy=None,
+                              key=None):
     """
     Compute imperceptibility PSNR from original vs watermarked, then run attacks and return results.
     """
@@ -345,12 +438,33 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         watermarked_pil_image = watermarked_pil_image.convert('RGB')
     host_rgb = np.array(watermarked_pil_image, dtype=np.uint8)
 
+    # NEW: Use hash-based pattern for text mode (must match embedding)
     if watermark_mode == 'text':
-        wm_gray_raw = create_text_watermark(watermark_text or 'Copyright', 256)
+        wm_gray_raw = create_text_watermark_hash(watermark_text or 'Copyright', 256)
+    # IMAGE watermark mode
+    elif watermark_mode == 'image':
+        if watermark_pil_image is None:
+            raise ValueError("watermark_pil_image is required for image mode")
+        
+        # NEW: Hash the image pixels with SHA-256 (same approach as text)
+        wm_gray = watermark_pil_image.convert('L')  # Grayscale
+        wm_gray = wm_gray.resize((256, 256), Image.BICUBIC)  # Standardize size
+        wm_array = np.array(wm_gray).flatten()  # Flatten to 1D
+        
+        # Compute SHA-256 hash of image pixel data
+        import hashlib
+        wm_bytes = wm_array.tobytes()
+        hash_obj = hashlib.sha256(wm_bytes)
+        hash_hex = hash_obj.hexdigest()
+        
+        # Convert hash to 256-bit binary pattern (same as text mode)
+        hash_bytes = bytes.fromhex(hash_hex)
+        bits = np.unpackbits(np.frombuffer(hash_bytes, dtype=np.uint8))
+        
+        # Reshape to 256-bit watermark
+        wm_gray_raw = bits.reshape(256, 1).astype(np.float32)
     else:
-        if watermark_pil_image.mode != 'L':
-            watermark_pil_image = watermark_pil_image.convert('L')
-        wm_gray_raw = np.array(watermark_pil_image, dtype=np.float64)
+        raise ValueError("Invalid watermark_mode. Use 'text' or 'image'.")
 
     Y_host = cv2.cvtColor(host_rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float64)
     # FIXED: Use direct _prepare_capacity_and_wm (same as embed)
@@ -465,3 +579,24 @@ def test_watermark_robustness(watermarked_pil_image, watermark_mode, watermark_t
         'alpha': float(alpha),
         'imperceptibility_psnr': round(float(imperceptibility_psnr), 2)
     }
+
+# NEW: Key-derived bit scrambler for confidentiality
+def _scramble_bits(bits: np.ndarray, key: str, salt: bytes) -> np.ndarray:
+    """XOR bits with key-derived pseudo-random mask for confidentiality"""
+    flat = bits.flatten()
+    # Derive deterministic mask from key + salt using SHA256
+    kdf = hashlib.sha256((key + salt.hex()).encode('utf-8')).digest()
+    # Expand to match bit array length using repeated hashing
+    mask_bytes = kdf
+    while len(mask_bytes) < len(flat):
+        mask_bytes += hashlib.sha256(mask_bytes).digest()
+    # Convert bytes to +1/-1 bit mask
+    mask = np.frombuffer(mask_bytes[:len(flat)], dtype=np.uint8)
+    mask = ((mask & 1) * 2 - 1).astype(np.float64)  # 0→-1, 1→+1
+    # XOR operation in {-1,+1} domain: multiply
+    scrambled = flat * mask
+    return scrambled.reshape(bits.shape)
+
+def _unscramble_bits(scrambled: np.ndarray, key: str, salt: bytes) -> np.ndarray:
+    """Reverse XOR scrambling (self-inverse operation)"""
+    return _scramble_bits(scrambled, key, salt)  # XOR is self-inverse

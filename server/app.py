@@ -14,6 +14,59 @@ import cv2
 from PIL import Image as PILImage
 import re  # NEW
 from PIL import Image
+import logging  # NEW
+
+# NEW: force all prints to ASCII-safe to prevent Windows console Unicode errors
+import builtins as _builtins
+_original_print = print
+def _ascii_print(*args, **kwargs):
+    try:
+        msg = " ".join(str(a) for a in args)
+        msg = msg.encode('ascii', 'replace').decode('ascii')
+        _original_print(msg, **kwargs)
+    except Exception:
+        try:
+            _original_print(*args, **kwargs)
+        except Exception:
+            pass
+_builtins.print = _ascii_print
+
+# NEW: ASCII-safe logger setup (moved up so it's available for early logs)
+class AsciiSafeFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            # Sanitize the message to ASCII but keep format placeholders intact
+            if isinstance(record.msg, (bytes, bytearray)):
+                record.msg = record.msg.decode('ascii', 'replace')
+            else:
+                record.msg = str(record.msg).encode('ascii', 'replace').decode('ascii')
+
+            # Preserve numeric types to satisfy %d / %.4f, only sanitize non-numeric args
+            if record.args:
+                new_args = []
+                for a in record.args:
+                    if isinstance(a, (int, float)):
+                        new_args.append(a)
+                    elif isinstance(a, (bytes, bytearray)):
+                        new_args.append(a.decode('ascii', 'replace'))
+                    else:
+                        new_args.append(str(a).encode('ascii', 'replace').decode('ascii'))
+                record.args = tuple(new_args)
+        except Exception:
+            # Do not modify args on failure to avoid formatter errors
+            pass
+        return True
+
+logger = logging.getLogger("ai_image_suite")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    _h.addFilter(AsciiSafeFilter())
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+
+# Silence logging formatter exceptions in production-like runs
+logging.raiseExceptions = False
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -69,14 +122,14 @@ try:
     from watermarker import WaterMarker
     WATERMARK_AVAILABLE = True
     if RUN_MAIN:
-        print(f"✅ [SERVER] WaterMarker imported from: {WATERMARK_UI_PATH}")
+        logger.info("[SERVER] WaterMarker imported from: %s", WATERMARK_UI_PATH)
 except Exception as e:
     WATERMARK_AVAILABLE = False
     if RUN_MAIN:
-        print(f"❌ [SERVER] Failed to import WaterMarker: {e}")
+        logger.error("[SERVER] Failed to import WaterMarker: %s", e)
 
 if RUN_MAIN:
-    print(f"🔍 [SERVER] Added Module-2 path: {MODULE2_PATH}")
+    logger.info("[SERVER] Added Module-2 path: %s", MODULE2_PATH)
 
 # FIXED: Import evaluator after Module-2 is in path
 try:
@@ -85,11 +138,11 @@ try:
     from image_prompt_evaluator import ImagePromptEvaluator
     EVALUATOR_AVAILABLE = True
     if RUN_MAIN:
-        print("✅ [SERVER] ImagePromptEvaluator imported successfully")
+        logger.info("[SERVER] ImagePromptEvaluator imported successfully")
 except ImportError as e:
     EVALUATOR_AVAILABLE = False
     if RUN_MAIN:
-        print(f"❌ [SERVER] Failed to import ImagePromptEvaluator: {e}")
+        logger.error("[SERVER] Failed to import ImagePromptEvaluator: %s", e)
 
 # Add auth_routes and gallery_routes imports here
 # Import auth routes - use importlib to avoid conflict with DF-GAN models
@@ -146,10 +199,10 @@ app.register_blueprint(extract_bp)
 try:
     init_db()
     if RUN_MAIN:
-        print("✅ [SERVER] Database initialized successfully")
+        logger.info("[SERVER] Database initialized successfully")
 except Exception as e:
     if RUN_MAIN:
-        print(f"⚠️ [SERVER] Database initialization warning: {e}")
+        logger.warning("[SERVER] Database initialization warning: %s", e)
 
 # Helper function to get user from request
 def get_user_from_request():
@@ -201,7 +254,7 @@ def save_generated_image(user_id, prompt, img_path, dataset):
         finally:
             session.close()
     except Exception as e:
-        print(f"Error saving generated image: {e}")
+        logger.error("Error saving generated image: %s", e)
         return None
 
 # Helper function to save watermarked image to database
@@ -236,7 +289,7 @@ def save_watermarked_image(user_id, original_path, watermarked_pil, watermark_te
         finally:
             session.close()
     except Exception as e:
-        print(f"Error saving watermarked image: {e}")
+        logger.error("Error saving watermarked image: %s", e)
         return None
 
 # Global variables
@@ -265,9 +318,9 @@ def get_evaluator():
     if EVALUATOR_AVAILABLE and _evaluator is None:
         try:
             _evaluator = ImagePromptEvaluator()
-            print("✅ [SERVER] ImagePromptEvaluator initialized")
+            logger.info("[SERVER] ImagePromptEvaluator initialized")
         except Exception as e:
-            print(f"❌ [SERVER] Failed to initialize evaluator: {e}")
+            logger.error("Failed to initialize evaluator: %s", e)
             return None
     return _evaluator
 
@@ -302,9 +355,9 @@ def dfgan_generate(prompt: str, model_key: str, out_dir: Path, seed: Optional[in
         weights = COCO_WEIGHTS
         data_dir = str(get_data_dir('coco'))
     
-    print(f"Using model: {weights}")
-    print(f"Using data directory: {data_dir}")
-    print(f"Prompt: {prompt}")
+    logger.info("Using model: %s", weights)
+    logger.info("Using data directory: %s", data_dir)
+    logger.info("Prompt: %s", prompt)
     
     try:
         # Create or get the generator for this model
@@ -323,15 +376,15 @@ def dfgan_generate(prompt: str, model_key: str, out_dir: Path, seed: Optional[in
 
         # Generate the image
         img_path = generator.generate_image(prompt, out_dir)
-        print(f"Image generated at: {img_path}")
+        logger.info("Image generated at: %s", img_path)
 
         return img_path
 
     except Exception as e:
         error_msg = f"Error generating image: {str(e)}"
-        print(error_msg)
+        logger.error(error_msg)
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         raise RuntimeError(error_msg)
 
 def encode_b64(path: Path) -> str:
@@ -397,9 +450,9 @@ def generate():
     # Get authenticated user (optional - anonymous generation still allowed)
     current_user = get_user_from_request()
     if current_user:
-        print(f"🔍 [GENERATE] Authenticated user detected: {current_user.email}")
+        logger.info("[GENERATE] Authenticated user: %s", current_user.email)
     else:
-        print(f"🔍 [GENERATE] No authenticated user (anonymous generation)")
+        logger.info("[GENERATE] Anonymous generation")
 
     try:
         script_path = ensure_paths_ok()
@@ -414,8 +467,8 @@ def generate():
     else:
         model_key = 'CUB' if is_cub_prompt(prompt) else 'COCO'
 
-    print(f"Using {model_key} model for prompt: '{prompt}'")
-    print(f"Using script: {script_path}")
+    logger.info("Using %s model for prompt '%s'", model_key, prompt)
+    logger.info("Using script: %s", script_path)
 
     tmp_root = Path(tempfile.gettempdir()) / f'dfgan_{uuid.uuid4().hex}'
     images_b64: List[str] = []
@@ -437,20 +490,20 @@ def generate():
                 )
                 images_b64.append(encode_b64(img_path))
                 generated_paths.append(img_path)
-                print(f"✅ [CUB] Generated bird image using DF-GAN only: {img_path}")
+                logger.info("[CUB] Generated bird image using DF-GAN only: %s", img_path)
             
             # COCO dataset: Check for specialized generators (Plant/Vehicle/Animal)
             elif is_plant_prompt(prompt):
-                print(f"🌸 [PLANT] Using specialized plant generator for: {prompt}")
+                logger.info("[PLANT] Using plant generator for: %s", prompt)
                 output_filename = uuid.uuid4().hex
                 img_path, plant_type = generate_plant_image(prompt, tmp_root, output_filename)
                 
                 if img_path and os.path.exists(str(img_path)):
                     images_b64.append(encode_b64(img_path))
                     generated_paths.append(img_path)
-                    print(f"✅ [PLANT] Plant image generated: {img_path} (type: {plant_type})")
+                    logger.info("[PLANT] Plant image generated: %s (type=%s)", img_path, plant_type)
                 else:
-                    print("⚠️ [PLANT] Plant generation failed, falling back to DF-GAN")
+                    logger.warning("[PLANT] Plant generation failed; falling back to DF-GAN")
                     img_path = dfgan_generate(
                         prompt, model_key, tmp_root,
                         seed if seed is not None and int(seed) >= 0 else None,
@@ -462,23 +515,16 @@ def generate():
             # Vehicle/Animal specialized handling
             elif is_vehicle_prompt(prompt) or _is_animal_prompt(prompt):
                 label = 'Animal' if _is_animal_prompt(prompt) else 'Vehicle'
-                print(f"[{label}] Using specialized {label.lower()} generator for: {prompt}")
+                logger.info("[%s] Using specialized generator for: %s", label, prompt)
                 output_filename = uuid.uuid4().hex
                 img_path, vehicle_type = generate_vehicle_image(prompt, tmp_root, output_filename)
                 
                 if img_path and os.path.exists(str(img_path)):
                     images_b64.append(encode_b64(img_path))
                     generated_paths.append(img_path)
-                    print(f"Vehicle image generated: {img_path} (type: {vehicle_type})")
+                    logger.info("%s image generated: %s (type=%s)", label, img_path, vehicle_type)
                 else:
-                    print("Vehicle generation failed, falling back to DF-GAN")
-                    img_path = dfgan_generate(
-                        prompt, model_key, tmp_root,
-                        seed if seed is not None and int(seed) >= 0 else None,
-                        steps, guidance
-                    )
-                    images_b64.append(encode_b64(img_path))
-                    generated_paths.append(img_path)
+                    logger.warning("%s generation failed; falling back to DF-GAN", label)
             
             # Default: DF-GAN for everything else
             else:
@@ -498,13 +544,14 @@ def generate():
                     blended_img = blend_images(dfgan_img, entity_img, position=(64, 64))
                     # Overwrite DF-GAN file with blended image
                     cv2.imwrite(str(img_path), cv2.cvtColor(blended_img, cv2.COLOR_RGB2BGR))
+                    logger.info("[BLEND] Entity blend applied for type=%s", entity_type)
 
                 images_b64.append(encode_b64(img_path))
                 generated_paths.append(img_path)
 
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         shutil.rmtree(tmp_root, ignore_errors=True)
         return jsonify({'error': str(e)}), 500
 
@@ -513,9 +560,9 @@ def generate():
         try:
             for img_path in generated_paths:
                 save_generated_image(current_user.id, prompt, img_path, dataset or model_key)
-            print(f"✅ Saved {len(generated_paths)} images to gallery for user {current_user.email}")
+            logger.info("[GENERATE] Saved %d images for user %s", len(generated_paths), current_user.email)
         except Exception as e:
-            print(f"⚠️ Failed to save images to gallery: {e}")
+            logger.warning("[GENERATE] Failed saving images: %s", e)
     
     # Publish event, cleanup, response
     try:
@@ -544,26 +591,20 @@ def gen_events():
 
 @app.route('/api/test', methods=['GET', 'POST'])
 def test_endpoint():
-    """Simple test endpoint to verify API connectivity"""
-    print("🔍 [TEST] /api/test endpoint called")
+    logger.info("[TEST] /api/test called method=%s", request.method)
     if request.method == 'POST':
         data = request.get_json()
-        print(f"🔍 [TEST] POST data received: {data}")
+        logger.info("[TEST] POST payload keys=%s", list(data.keys()) if isinstance(data, dict) else 'N/A')
         return jsonify({'status': 'success', 'method': 'POST', 'data': data})
     else:
-        print("🔍 [TEST] GET request received")
         return jsonify({'status': 'success', 'method': 'GET', 'message': 'API is working'})
 
 @app.route('/api/evaluate-image', methods=['POST', 'OPTIONS'])
 def evaluate_single_image():
-    """Evaluate uploaded image using Module-2 evaluator"""
-    print("\n🔍 [EVAL] /api/evaluate-image called")
-    print(f"🔍 [EVAL] Request method: {request.method}")
-    print(f"🔍 [EVAL] Request headers: {dict(request.headers)}")
-    
+    logger.info("[EVAL] /api/evaluate-image method=%s", request.method)
     # Handle CORS preflight
     if request.method == 'OPTIONS':
-        print("🔍 [EVAL] Handling CORS preflight")
+        logger.info("[EVAL] Handling CORS preflight")
         response = jsonify({'message': 'CORS preflight'})
         response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -571,36 +612,36 @@ def evaluate_single_image():
         return response
     
     try:
-        print("🔍 [EVAL] Processing POST request")
+        logger.info("[EVAL] Processing POST request")
         
         # Check content type
         if not request.is_json:
-            print(f"❌ [EVAL] Request is not JSON, content-type: {request.content_type}")
+            logger.error("[EVAL] Request is not JSON, content-type: %s", request.content_type)
             return jsonify({'error': 'Request must be JSON'}), 400
         
         data = request.get_json()
         if not data:
-            print("❌ [EVAL] No JSON data received")
+            logger.error("[EVAL] No JSON data received")
             return jsonify({'error': 'No data provided'}), 400
             
-        print(f"🔍 [EVAL] JSON data keys: {list(data.keys())}")
+        logger.info("[EVAL] JSON data keys: %s", list(data.keys()))
         
         image_b64 = data.get('image', '')
         prompt = data.get('prompt', '').strip()
         threshold = float(data.get('threshold', 0.22))
         
-        print(f"🔍 [EVAL] Prompt: '{prompt[:50]}...'")
-        print(f"🔍 [EVAL] Threshold: {threshold}")
-        print(f"🔍 [EVAL] Image data length: {len(image_b64)}")
+        logger.info("[EVAL] Prompt: '%s'", prompt[:50])
+        logger.info("[EVAL] Threshold: %s", threshold)
+        logger.info("[EVAL] Image data length: %d", len(image_b64))
         
         if not image_b64 or not prompt:
-            print("❌ [EVAL] Missing image or prompt")
+            logger.error("[EVAL] Missing image or prompt")
             return jsonify({'error': 'Image and prompt required'}), 400
 
         # Get evaluator
         evaluator = get_evaluator()
         if not evaluator:
-            print("❌ [EVAL] Evaluator not available")
+            logger.error("[EVAL] Evaluator not available")
             return jsonify({'error': 'Evaluator not available - check server logs'}), 500
 
         # Decode base64 image
@@ -610,9 +651,9 @@ def evaluate_single_image():
             
             image_bytes = base64.b64decode(image_b64)
             img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
-            print(f"✅ [EVAL] Image decoded: {img.size}")
+            logger.info("[EVAL] Image decoded size=%s", img.size)
         except Exception as e:
-            print(f"❌ [EVAL] Image decode error: {e}")
+            logger.error("[EVAL] Image decode error: %s", e)
             return jsonify({'error': f'Invalid image: {e}'}), 400
 
         # Save to temp file
@@ -621,19 +662,19 @@ def evaluate_single_image():
         tmp_dir.mkdir(parents=True, exist_ok=True)
         img_path = tmp_dir / 'image.png'
         img.save(str(img_path))
-        print(f"✅ [EVAL] Image saved to: {img_path}")
+        logger.info("[EVAL] Image saved temp=%s", img_path)
 
         # Run Module-2 evaluation
-        print("🔍 [EVAL] Running Module-2 evaluation...")
+        logger.info("[EVAL] Running evaluation...")
         try:
             result = evaluator.evaluate_image(str(img_path), prompt, threshold)
-            print(f"✅ [EVAL] Evaluation complete!")
-            print(f"🎯 [EVAL] Result: {result.get('percentage_match', 'N/A')} ({result.get('quality', 'N/A')})")
+            logger.info("[EVAL] Complete percentage=%s quality=%s",
+                        result.get('percentage_match'), result.get('quality'))
             
             if 'keyword_analysis' in result:
-                print(f"🎯 [EVAL] Keywords: {len(result['keyword_analysis'])} analyzed")
+                logger.info("[EVAL] Keywords: %d analyzed", len(result['keyword_analysis']))
         except Exception as e:
-            print(f"❌ [EVAL] Evaluation failed: {e}")
+            logger.error("[EVAL] Evaluation failed: %s", e)
             import traceback
             traceback.print_exc()
             result = {'error': str(e)}
@@ -646,14 +687,14 @@ def evaluate_single_image():
             pass
 
         if 'error' in result:
-            print(f"❌ [EVAL] Returning error: {result['error']}")
+            logger.error("[EVAL] Returning error: %s", result['error'])
             return jsonify(result), 500
             
-        print("✅ [EVAL] Returning results to frontend")
+        logger.info("[EVAL] Returning response")
         return jsonify(result)
         
     except Exception as e:
-        print(f"❌ [EVAL] Critical error: {e}")
+        logger.error("[EVAL] Critical error: %s", e)
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Server error: {str(e)}'}), 500
@@ -780,7 +821,7 @@ def _decode_any_to_pil(data: str) -> PILImage.Image:
 
 @app.route('/api/watermark/test', methods=['GET'])
 def watermark_test():
-    print("🔍 [WATERMARK] /api/watermark/test OK")
+    logger.info("[WATERMARK] /api/watermark/test OK")
     return jsonify({'ok': True, 'ts': int(time.time())})
 
 # NEW: helpers for watermark API
@@ -875,14 +916,14 @@ def apply_invisible_watermark():
             if hasattr(result, '_watermarked_array'):
                 wm_bgr = cv2.cvtColor(result._watermarked_array, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(str(file_path), wm_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-                print(f"✅ [INVISIBLE WM] Saved via cv2 (raw array) to: {file_path}")
+                logger.info("[INVISIBLE WM] Saved (cv2) %s", file_path)
             else:
                 # Fallback: PIL save
                 if hasattr(result, 'pnginfo') and result.pnginfo:
                     result.save(file_path, format='PNG', pnginfo=result.pnginfo, optimize=False, compress_level=0)
                 else:
                     result.save(file_path, format='PNG', optimize=False, compress_level=0)
-                print(f"✅ [INVISIBLE WM] Saved via PIL (fallback) to: {file_path}")
+                logger.info("[INVISIBLE WM] Saved (PIL) %s", file_path)
             
             # Step 2: Add PNG text chunks WITHOUT re-encoding pixels
             try:
@@ -936,9 +977,9 @@ def apply_invisible_watermark():
                 with open(file_path, 'wb') as f:
                     f.write(png_data)
                 
-                print(f"   ✅ Added PNG metadata to saved file (direct chunk injection)")
+                logger.info("[INVISIBLE WM] Added PNG metadata")
             except Exception as meta_err:
-                print(f"   ⚠️ Failed to add PNG metadata: {meta_err}")
+                logger.warning("[INVISIBLE WM] Failed to add PNG metadata: %s", meta_err)
                 # Don't fail the entire operation if metadata fails
             
             # VERIFICATION: Read back and test extraction
@@ -959,18 +1000,18 @@ def apply_invisible_watermark():
                     verify_ncc = None
                 
                 if verify_ncc is not None:
-                    print(f"   🔍 Post-save verification NCC: {verify_ncc:.4f}")
+                    logger.info("[INVISIBLE WM] Post-save NCC=%.4f", verify_ncc)
                     
                     if verify_ncc < 0.9:
-                        print(f"   ⚠️ WARNING: Watermark degraded after save! NCC dropped to {verify_ncc:.4f}")
+                        logger.warning("[INVISIBLE WM] Watermark degradation NCC=%.4f", verify_ncc)
                     else:
-                        print(f"   ✅ Watermark preserved after save (NCC={verify_ncc:.4f})")
+                        logger.info("[INVISIBLE WM] Watermark preserved NCC=%.4f", verify_ncc)
             except Exception as verify_err:
-                print(f"   ⚠️ Post-save verification failed: {verify_err}")
+                logger.warning("[INVISIBLE WM] Post-save verification failed: %s", verify_err)
             
             saved_paths.append(file_path)
             
-            print(f"   Metadata: size={wm_size}, red={red}, text='{wm_text}'")
+            logger.info("   Metadata: size=%s, red=%s, text='%s'", wm_size, red, wm_text)
             
             # Convert to base64 for frontend
             buf = io.BytesIO()
@@ -981,11 +1022,12 @@ def apply_invisible_watermark():
                 'serverPath': str(file_path)  # NEW: Include server path in response
             })
         except Exception as e:
+            logger.error("[INVISIBLE WM] Failed at index %d: %s", idx, e)
             import traceback
             traceback.print_exc()
             return jsonify({ 'error': f'Invisible watermarking failed at index {idx}: {e}' }), 400
 
-    print(f"✅ [INVISIBLE WM] Saved {len(saved_paths)} images to: {uploads_dir}")
+    logger.info("[INVISIBLE WM] Saved %d image(s) directory=%s", len(saved_paths), uploads_dir)
     return jsonify({ 'images': out_images, 'uploads_dir': str(uploads_dir) })
 
 @app.route('/api/watermark/test-robustness', methods=['POST', 'OPTIONS'], endpoint='watermark_test_robustness')
@@ -1023,8 +1065,8 @@ def test_invisible_watermark_robustness():
         if watermark_mode not in ['text', 'image']:
             return jsonify({'error': 'Invalid watermark mode. Use "text" or "image".'}), 400
 
-        print(f"🧪 [ROBUSTNESS TEST] Starting robustness test for {len(images)} image(s)")
-        print(f"   Mode: {watermark_mode}, Alpha: {alpha}")
+        logger.info("[ROBUSTNESS] Starting robustness test for %d image(s)", len(images))
+        logger.info("   Mode: %s, Alpha: %s", watermark_mode, alpha)
 
         # Process only the first image for robustness testing
         first_image = images[0]
@@ -1064,7 +1106,7 @@ def test_invisible_watermark_robustness():
             redundancy=redundancy
         )
 
-        print(f"✅ [ROBUSTNESS TEST] Completed {len(test_results['results'])} robustness tests")
+        logger.info("[ROBUSTNESS] Completed tests=%d", len(test_results['results']))
 
         return jsonify({
             'success': True,
@@ -1076,8 +1118,8 @@ def test_invisible_watermark_robustness():
             'imperceptibility_psnr': test_results.get('imperceptibility_psnr'),
             'image_name': name
         })
-
     except Exception as e:
+        logger.error("[ROBUSTNESS] Failed: %s", e)
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Robustness testing failed: {e}'}), 500
@@ -1101,16 +1143,16 @@ def apply_watermark_main():
     # Get authenticated user (optional - anonymous watermarking still allowed)
     current_user = get_user_from_request()
     if current_user:
-        print(f"🔍 [WATERMARK] Authenticated user detected: {current_user.email}")
+        logger.info("[WATERMARK] Auth user=%s", current_user.email)
     else:
-        print(f"🔍 [WATERMARK] No authenticated user (anonymous watermarking)")
+        logger.info("[WATERMARK] Anonymous request")
 
     # Accept JSON; log raw body length for debugging
     try:
         payload = request.get_json(force=True) or {}
         # Note: removed verbose payload dump to avoid logging large base64 data
     except Exception as e:
-        print(f"❌ [WATERMARK] Invalid JSON body: {e}")
+        logger.error("[WATERMARK] Invalid JSON body: %s", e)
         return jsonify({'error': 'Invalid JSON body'}), 400
 
     # Normalize payload keys from various UIs
@@ -1129,8 +1171,9 @@ def apply_watermark_main():
     wm_path = norm.get('watermarkPath')
     wm_data_url = norm.get('watermarkDataUrl')
 
-    print("🔍 [WATERMARK] /api/watermark/apply called")
-    print(f"🔍 [WATERMARK] mode={mode}, pos={pos}, padding={padding}, scale={scale}, opacity={opacity}, rotation={rotation}, count={len(images)}")
+    logger.info("[WATERMARK] /api/watermark/apply called")
+    logger.info("[WATERMARK] mode=%s pos=%s opacity=%.3f rotation=%d count=%d",
+                mode, pos, opacity, rotation, len(images))
 
     if not isinstance(images, list) or len(images) == 0:
         return jsonify({'error': 'images array is required'}), 400
@@ -1254,7 +1297,7 @@ def apply_watermark_main():
                         opacity=opacity
                     )
                 except Exception as e:
-                    print(f"⚠️ Failed to save watermarked image to gallery: {e}")
+                    logger.warning("[WATERMARK] Save gallery failed: %s", e)
             
             out_images.append({
                 'name': name,
@@ -1267,9 +1310,9 @@ def apply_watermark_main():
             except: pass
 
     if current_user and len(out_images) > 0:
-        print(f"✅ [WATERMARK] Applied watermark to {len(out_images)} image(s) and saved to gallery for user {current_user.email}")
+        logger.info("[WATERMARK] Applied to %d image(s) saved for user=%s", len(out_images), current_user.email)
     else:
-        print(f"✅ [WATERMARK] Applied watermark to {len(out_images)} image(s)")
+        logger.info("[WATERMARK] Applied to %d image(s)", len(out_images))
     return jsonify({'images': out_images})
 
 # Aliases for compatibility
@@ -1373,7 +1416,7 @@ def debug_extract_latest():
             redundancy = img.info.get('redundancy', 3)
             watermark_text = img.info.get('watermark_text', '')
         
-        print(f"🔍 [DEBUG] Extracted metadata: size={wm_size}, red={redundancy}, text='{watermark_text}'")
+        logger.info("[DEBUG] Metadata size=%s red=%s text='%s'", wm_size, redundancy, watermark_text)
         
         # Extract
         wm_rgb = np.array(img.convert('RGB'))
@@ -1403,7 +1446,8 @@ def debug_extract_latest():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '5001'))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=True)
+    # Keep debug on for development, but disable the reloader to avoid parent process exit
+    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
 
 
 
