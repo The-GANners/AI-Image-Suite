@@ -719,44 +719,45 @@ const Watermark = () => {
                       </label>
                       <input className="input w-full" value={watermarkText} onChange={(e)=> setWatermarkText(e.target.value)} placeholder="Enter watermark text" />
                     </div>
-                    <div className="flex space-x-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                          Text size
-                        </label>
-                        <input
-                          type="text"
-                          className="input w-24"
-                          value={textSize}
-                          onChange={e => {
-                            let v = e.target.value;
-                            // Allow empty for typing
-                            if (v === '') {
-                              setTextSize('');
-                            } else {
-                              // Only allow numbers
-                              if (/^\d{0,3}$/.test(v)) {
-                                setTextSize(v);
+                    {/* Only show text size and color for VISIBLE watermarks */}
+                    {watermarkType === 'visible' && (
+                      <div className="flex space-x-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Text size
+                          </label>
+                          <input
+                            type="text"
+                            className="input w-24"
+                            value={textSize}
+                            onChange={e => {
+                              let v = e.target.value;
+                              if (v === '') {
+                                setTextSize('');
+                              } else {
+                                if (/^\d{0,3}$/.test(v)) {
+                                  setTextSize(v);
+                                }
                               }
-                            }
-                          }}
-                          onBlur={e => {
-                            let num = parseInt(e.target.value, 10);
-                            if (isNaN(num) || num < 30) setTextSize(30);
-                            else if (num > 200) setTextSize(200);
-                            else setTextSize(num);
-                          }}
-                          placeholder="30-200"
-                          inputMode="numeric"
-                        />
+                            }}
+                            onBlur={e => {
+                              let num = parseInt(e.target.value, 10);
+                              if (isNaN(num) || num < 30) setTextSize(30);
+                              else if (num > 200) setTextSize(200);
+                              else setTextSize(num);
+                            }}
+                            placeholder="30-200"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Color (name or hex)
+                          </label>
+                          <input className="input w-40" value={textColor} onChange={(e)=> setTextColor(e.target.value)} placeholder="#FFFFFF or red" />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                          Color (name or hex)
-                        </label>
-                        <input className="input w-40" value={textColor} onChange={(e)=> setTextColor(e.target.value)} placeholder="#FFFFFF or red" />
-                      </div>
-                    </div>
+                    )}
                   </>
                 )}
 
