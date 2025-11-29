@@ -24,7 +24,7 @@
 3.  **Watermark Embedding (Both Visible and Invisible) (Module 3)** - Add professional watermarks to protect your images
 4.  **Website Integration (Full Suite)** - A cohesive web app that orchestrates DF-GAN generation (Module 1), CLIP-based evaluation (Module 2), and visible and invisible watermarking mechanisms (Module 3), adding batch workflows, auto-evaluation, galleries, recommendations, and streamlined downloads.
 
-> 💡 **Key Features:** Full-stack architecture, secure authentication, batch processing, and DWT-DCT invisible watermarking for high robustness.
+> 💡 **Key Features:** Full-stack architecture, DF-GAN for text to image generation, secure authentication, Semantic Evaluation through CLIP and DWT-DCT invisible watermarking for high robustness.
 
 ---
 
@@ -62,6 +62,7 @@
     * High redundancy embedding for **robustness against attacks**.
     * All metrics are computed and displayed in the web UI for transparency.
     *  Real-time preview and batch download functionality.
+    *  Support for Watermark Extraction (Binary Pattern) with verification functionality.
 
 ### 🔐 Authentication & User Management
 * **Firebase Authentication** - Secure, cross-device authentication
@@ -100,7 +101,8 @@
 | **File Handling** | React Dropzone |
 | **Notifications** | React Hot Toast |
 | **Build Tool** | Create React App |
-| **AI Models** | **DF-GAN** for text-to-image generation, **CLIP** for image-prompt evaluation, **DWT-DCT** for invisible watermarking |
+| **AI Models** | **DF-GAN** for text-to-image generation, **CLIP** for image-prompt evaluation |
+| **Watermarking mechanism** | Simple **visible** watermarking, **DWT-DCT** for invisible watermarking |
 
 ---
 
@@ -140,17 +142,16 @@ The AI-Image-Suite server uses a flexible path configuration system that works a
     FIREBASE_PROJECT_ID=your-project-id
     ```
 
-5.  **Start the backend server**
-    ```bash
-    python server/app.py
-    ```
+5. **Start the backend and development server simultaneously:**
 
-6.  **Start the development server**
-    ```bash
-    npm start
-    ```
+   ⚠️ **Important Note:**  
+   When starting both servers, the frontend will open immediately, but the **initialization of the database, models, and encoders** may take **10–15 seconds** on the first run. After this warm-up, the application responds normally and runs quickly.
 
-7.  **Open your browser**
+   ```bash
+   npm run dev
+
+
+6.  **Open your browser**
     Navigate to `http://localhost:3000`
 
 ---
@@ -197,7 +198,7 @@ The AI-Image-Suite server uses a flexible path configuration system that works a
   
 #### Invisible Watermarking (DWT-DCT)
 * **Description:** Embeds a binary watermark (text or image) into the host image using a combination of **Discrete Wavelet Transform (DWT)** and **Discrete Cosine Transform (DCT)**.
-* **Implementation:**  Embedding and extraction are performed on the $\text{Y}$ channel (luminance) in $\text{YCbCr}$ color space. Watermark is embedded in **DCT coefficients of DWT-LL subbands**, with adaptive margin and redundancy.
+* **Implementation:**  Embedding and extraction are performed on the $\text{Y}$ channel (luminance) in $\text{YCbCr}$ color space. Watermark is embedded in **DCT coefficients of DWT-LL subbands**, with adaptive margin and redundancy. Supports watermark extraction (binary pattern) with verification functionality.
 
 | Metric | Purpose | Formula |
 | :--- | :--- | :--- |
