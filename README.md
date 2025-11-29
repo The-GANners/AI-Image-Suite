@@ -52,7 +52,6 @@
     * Customizable watermark positioning: Top-Left, Top-Right, Bottom-Left, Bottom-Right, Center.
     * Adjustable opacity (0–100%), scale (auto-resize), and rotation.
     * Padding options (pixels or percentage) for precise placement.
-    * Batch processing with file naming options (prefix/suffix).
     * Real-time preview and batch download functionality.
 
 #### Invisible Watermarking (DWT-DCT)
@@ -62,6 +61,7 @@
     * Watermark is binarized and adaptively resized to match the host image's capacity.
     * High redundancy embedding for **robustness against attacks**.
     * All metrics are computed and displayed in the web UI for transparency.
+    *  Real-time preview and batch download functionality.
 
 ### 🔐 Authentication & User Management
 * **Firebase Authentication** - Secure, cross-device authentication
@@ -191,6 +191,10 @@ The AI-Image-Suite server uses a flexible path configuration system that works a
 
 ### Module 3 — Watermark UI (Standalone)
 
+### Visible Watermarking
+* **Description:**  Add visible watermarks (image or text) to your images in bulk.
+* **Implementation:** Customizable watermark positioning with adjustable opacity (0–100%) and support for various padding options (pixels or percentages).
+  
 #### Invisible Watermarking (DWT-DCT)
 * **Description:** Embeds a binary watermark (text or image) into the host image using a combination of **Discrete Wavelet Transform (DWT)** and **Discrete Cosine Transform (DCT)**.
 * **Implementation:**  Embedding and extraction are performed on the $\text{Y}$ channel (luminance) in $\text{YCbCr}$ color space. Watermark is embedded in **DCT coefficients of DWT-LL subbands**, with adaptive margin and redundancy.
