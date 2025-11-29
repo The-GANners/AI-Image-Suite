@@ -4,6 +4,7 @@
 
 <div align="center">
   
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB.svg?logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.5.0-EE4C2C.svg?logo=pytorch)
 ![CLIP](https://img.shields.io/badge/OpenAI%20CLIP-Model-412991.svg?logo=openai)
 ![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
